@@ -134,6 +134,7 @@ type ProviderDiffEvent = Pick<
   "type" | "eventId" | "threadId" | "turnId" | "itemId" | "createdAt"
 >;
 
+/** Keeps checkpoint routing metadata without retaining the provider's diff snapshot in the queue. */
 export function providerDiffSignal(
   event: Extract<ProviderRuntimeEvent, { type: "turn.diff.updated" }>,
 ): ProviderDiffEvent {
