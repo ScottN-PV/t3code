@@ -1058,6 +1058,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   );
 }
 
+/** Runs Git actions for the active checkout and routes generation failures to its model settings. */
 export default function GitActionsControl({
   presentation = "toolbar",
   gitCwd,

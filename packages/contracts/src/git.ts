@@ -377,6 +377,7 @@ export class TextGenerationError extends Schema.TaggedError<TextGenerationError>
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
+  /** Includes the attempted model when supplied, retaining the legacy message for older errors. */
   override get message(): string {
     const model = this.modelSelection
       ? ` using ${this.modelSelection.model} (${this.modelSelection.instanceId})`
