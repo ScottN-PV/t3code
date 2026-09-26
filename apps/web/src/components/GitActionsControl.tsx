@@ -3,6 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
+  TextGenerationError,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -21,6 +22,7 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import {
   type MouseEvent,
   useCallback,
@@ -112,8 +114,11 @@ import {
   useVcsInitAction,
   useVcsPullAction,
 } from "~/lib/sourceControlActions";
-import { useThreadProjection, useThreadShell } from "~/state/entities";
+import { readProjects, useThreadProjection, useThreadShell } from "~/state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
+import { getClientSettings } from "~/hooks/useSettings";
+import { derivePhysicalProjectKey, selectProjectGroupingSettings } from "~/logicalProject";
+import { buildPhysicalToLogicalProjectKeyMap } from "~/sidebarProjectGrouping";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
@@ -131,6 +136,8 @@ import {
 } from "./chat/threadDetailsPanelStyles";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useOpenLink } from "~/browser/useOpenLink";
+
+const isTextGenerationError = Schema.is(TextGenerationError);
 
 interface GitActionsControlProps {
   presentation?: "toolbar" | "menu";
@@ -1074,6 +1081,7 @@ export default function GitActionsControl({
   const isPanel = displayMode === "panel";
   const ActionGroup = isPanel ? "div" : Group;
   const panelAnchorRef = useRef<HTMLDivElement | null>(null);
+  const navigate = useNavigate();
   const updateThreadMetadata = useAtomCommand(
     threadEnvironment.updateMetadata,
     "thread branch metadata update",
@@ -1395,12 +1403,57 @@ export default function GitActionsControl({
 
         const error = squashAtomCommandFailure(result);
         const errorToastTiming = resolveGitActionResultToastTiming("error");
-        toastManager.add(
+        const modelSetting = isTextGenerationError(error) ? error.modelSetting : undefined;
+        let errorToastId: GitActionToastId | null = null;
+        errorToastId = toastManager.add(
           stackedThreadToast({
             type: "error",
             title: "Action failed",
             description: error instanceof Error ? error.message : "An error occurred.",
             timeout: errorToastTiming.timeout,
+            ...(isTextGenerationError(error)
+              ? {
+                  actionProps: {
+                    children: "Settings",
+                    onClick: () => {
+                      const projectId =
+                        activeServerThread?.projectId ?? activeDraftThread?.projectId;
+                      const projects = readProjects();
+                      const settingsProject = projects.find(
+                        (project) =>
+                          project.environmentId === activeEnvironmentId &&
+                          (projectId ? project.id === projectId : project.workspaceRoot === gitCwd),
+                      );
+                      const checkout = settingsProject
+                        ? derivePhysicalProjectKey(settingsProject)
+                        : undefined;
+                      const project = checkout
+                        ? buildPhysicalToLogicalProjectKeyMap({
+                            projects,
+                            settings: selectProjectGroupingSettings(getClientSettings()),
+                            primaryEnvironmentId: activeEnvironmentId,
+                          }).get(checkout)
+                        : undefined;
+                      if (errorToastId !== null) toastManager.close(errorToastId);
+                      void navigate({
+                        to:
+                          modelSetting === "sourceControlWriterModelSelection"
+                            ? "/settings/source-control"
+                            : "/settings/general",
+                        hash:
+                          modelSetting === "sourceControlWriterModelSelection"
+                            ? "source-control-writer-model"
+                            : "text-generation-model",
+                        search: {
+                          machine: activeEnvironmentId ?? undefined,
+                          project,
+                          checkout,
+                        },
+                      });
+                    },
+                  },
+                }
+              : {}),
             ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
           }),
         );
