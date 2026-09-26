@@ -79,6 +79,7 @@ function Main({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
+/** Extends the composer outline below the input, masking its overlap up to one pixel above the shared edge so no seam shows. */
 function ContextStrip({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
