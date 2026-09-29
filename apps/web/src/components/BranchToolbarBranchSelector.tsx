@@ -289,11 +289,11 @@ export function BranchToolbarBranchSelector({
   const prReference = parsePullRequestReference(trimmedBranchQuery);
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
-  const isWorktreeChangeBlockedForRef = (refName: VcsRef) =>
+  const isWorktreeChangeBlockedForRef = (refName: VcsRef, session = serverSession) =>
     activeProjectCwd !== null &&
     !isSelectingWorktreeBase &&
     isWorktreeChangeBlocked({
-      session: serverSession,
+      session,
       currentWorktreePath: activeWorktreePath,
       nextWorktreePath: resolveBranchSelectionTarget({
         activeProjectCwd,
@@ -439,7 +439,9 @@ export function BranchToolbarBranchSelector({
     }
 
     // Enter selects the highlighted value directly, so disabled rows need this too.
-    if (isWorktreeChangeBlockedForRef(refName)) return;
+    // A turn can start after the render this handler came from, so read the session again.
+    const latestSession = readThreadShell(threadRef)?.session ?? null;
+    if (isWorktreeChangeBlockedForRef(refName, latestSession)) return;
 
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
@@ -965,7 +967,7 @@ export function BranchToolbarBranchSelector({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {refs.some(isWorktreeChangeBlockedForRef) ? (
+          {refs.some((refName) => isWorktreeChangeBlockedForRef(refName)) ? (
             <ComboboxStatus>{WORKTREE_CHANGE_BLOCKED_MESSAGE}</ComboboxStatus>
           ) : null}
           {branchStatusText ? <ComboboxStatus>{branchStatusText}</ComboboxStatus> : null}
