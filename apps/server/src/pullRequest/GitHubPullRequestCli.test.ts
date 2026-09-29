@@ -65,6 +65,7 @@ const layer = it.layer(
       }),
     ),
     Layer.provideMerge(GitHubGraphQlBudget.layer),
+    Layer.provideMerge(SourceControlRateLimit.layer),
   ),
 );
 
@@ -247,7 +248,7 @@ it.effect(
       );
       const cli = yield* GitHubPullRequestCli.make.pipe(
         Effect.provideService(GitHubCli.GitHubCli, github),
-        Effect.provide(GitHubGraphQlBudget.layer),
+        Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer)),
       );
       const input = { cwd: "/repo", host: "github.com" };
       const first = yield* cli.withVerifiedCredential(input, (identity) =>
@@ -283,6 +284,53 @@ it.effect(
         viewer: "same-account",
       });
     }),
+);
+
+it.effect("does not verify a paused credential over the network and resumes after cooldown", () =>
+  Effect.gen(function* () {
+    const limits = yield* SourceControlRateLimit.make;
+    let token = "token-a";
+    const verified: string[] = [];
+    const cli = yield* GitHubPullRequestCli.make.pipe(
+      Effect.provideService(SourceControlRateLimit.SourceControlRateLimit, limits),
+      Effect.provide(
+        Layer.merge(
+          GitHubGraphQlBudget.layer,
+          Layer.mock(GitHubCli.GitHubCli)({
+            execute: (input) =>
+              Effect.sync(() => {
+                if (input.args[0] === "auth") return output(token);
+                verified.push(token);
+                return output('{"id":123,"login":"viewer"}');
+              }),
+          }),
+        ),
+      ),
+    );
+    const input = { cwd: "/repo", host: "github.com" };
+    yield* cli.withVerifiedCredential(input, () =>
+      limits.recordRateLimit({
+        provider: "github",
+        host: "github.com",
+        lease: 0,
+        retryAt: 20 * 60_000,
+      }),
+    );
+    // A cached identity does not spend quota and remains available to interactive routing.
+    assert.strictEqual(yield* cli.getViewerLogin(input), "viewer");
+    // Expire the ten-minute identity cache while this account remains paused.
+    yield* TestClock.adjust("11 minutes");
+    const paused = yield* Effect.flip(cli.getViewerLogin(input));
+    assert.strictEqual(paused._tag, "SourceControlRateLimitPausedError");
+    assert.deepStrictEqual(verified, ["token-a"]);
+    token = "token-b";
+    assert.strictEqual(yield* cli.getViewerLogin(input), "viewer");
+    assert.deepStrictEqual(verified, ["token-a", "token-b"]);
+    token = "token-a";
+    yield* TestClock.adjust("10 minutes");
+    assert.strictEqual(yield* cli.getViewerLogin(input), "viewer");
+    assert.deepStrictEqual(verified, ["token-a", "token-b", "token-a"]);
+  }),
 );
 
 it.effect.each([false, true])(
@@ -363,7 +411,7 @@ it.effect.each([false, true])(
       );
       const cli = yield* GitHubPullRequestCli.make.pipe(
         Effect.provideService(GitHubCli.GitHubCli, github),
-        Effect.provide(GitHubGraphQlBudget.layer),
+        Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer)),
       );
       const reads = yield* Effect.forEach(
         ["a", "b", "c", "a"],

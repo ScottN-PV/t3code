@@ -112,6 +112,7 @@ function changeRequest(number: number, updatedAt: string): ProviderChangeRequest
   };
 }
 
+/** Build a readable pull request with action permissions for service workflow tests. */
 function hostedChangeRequest(body: string, additions = 1) {
   return {
     ...changeRequest(1, "2026-07-02T00:00:00Z"),
@@ -199,6 +200,8 @@ it.effect.each(["list", "stats"] as const)(
       if (operation === "list") {
         const listed = yield* service.list({ state: "open", filters: { author: "@me" } });
         assert.strictEqual(listed.entries.length, 3);
+        assert.strictEqual(listed.viewers["a github.com"], "alice");
+        assert.strictEqual(listed.viewers["b github.com"], "bob");
         assert.deepStrictEqual(
           batches.toSorted((a, b) => a.credential.localeCompare(b.credential)),
           [
@@ -221,6 +224,258 @@ it.effect.each(["list", "stats"] as const)(
         ["c", 1],
       ]);
     }),
+);
+
+it.effect("prepares only cursor repositories while retaining workspace counts", () =>
+  Effect.gen(function* () {
+    const captures: string[] = [];
+    const service = yield* makeService({
+      projects: ["a", "b"].map((name) =>
+        project({
+          id: name,
+          title: name,
+          workspaceRoot: `/${name}`,
+          repository: `${name}/repo`,
+        }),
+      ),
+      providers: [
+        fakeProvider("github", {
+          withVerifiedCredential: ({ cwd }, use) =>
+            Effect.suspend(() => {
+              captures.push(cwd);
+              if (cwd === "/a") return Effect.die("Unrelated credentials must not be requested");
+              return use({ accountId: cwd, viewer: cwd, credentialFingerprint: cwd });
+            }),
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(2, "2026-07-01T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+    const result = yield* service.list({
+      state: "open",
+      cursors: {
+        "github.com b/repo": "2026-07-02T00:00:00Z|1|1",
+      },
+    });
+    assert.deepStrictEqual(captures, ["/b"]);
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.projectId),
+      ["b"],
+    );
+    assert.strictEqual(result.providers[0]?.projectCount, 2);
+    assert.strictEqual(result.viewers["b github.com"], "/b");
+  }),
+);
+
+it.effect("retains unrelated host summaries without credential lookups during continuation", () =>
+  Effect.gen(function* () {
+    const captures: string[] = [];
+    const service = yield* makeService({
+      projects: ["a", "b"].map((name) =>
+        project({
+          id: name,
+          title: name,
+          workspaceRoot: `/${name}`,
+          repository: `${name}/repo`,
+          host: `${name}.example.com`,
+        }),
+      ),
+      providers: [
+        fakeProvider("github", {
+          withVerifiedCredential: ({ cwd }, use) =>
+            Effect.suspend(() => {
+              captures.push(cwd);
+              return use({ accountId: cwd, viewer: cwd, credentialFingerprint: cwd });
+            }),
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(2, "2026-07-01T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+    const first = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(
+      first.providers.map((host) => host.configured),
+      [true, true],
+    );
+    captures.length = 0;
+    const next = yield* service.list({
+      state: "open",
+      cursors: {
+        "b.example.com b/repo": "2026-07-02T00:00:00Z|1|1",
+      },
+    });
+    assert.deepStrictEqual(captures, ["/b"]);
+    assert.deepStrictEqual(next.providers, first.providers);
+    yield* service.invalidate({});
+    captures.length = 0;
+    const cold = yield* service.list({
+      state: "open",
+      cursors: {
+        "b.example.com b/repo": "2026-07-02T00:00:00Z|1|1",
+      },
+    });
+    assert.deepStrictEqual(captures, ["/b"]);
+    assert.strictEqual(
+      cold.providers.find((host) => host.host === "a.example.com")?.detail,
+      "Sign-in was not checked on this continuation page.",
+    );
+  }),
+);
+
+it.effect("retains whole-host viewer failures for providers without pinned credentials", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ["a", "b", "c"].map((name) =>
+        project({
+          id: name,
+          title: name,
+          workspaceRoot: `/${name}`,
+          repository: `${name}/repo`,
+          host: name === "c" ? "github.example.com" : "github.com",
+        }),
+      ),
+      providers: [
+        fakeProvider("github", {
+          getViewer: ({ host }) =>
+            host === "github.com" ? Effect.fail(requestFailed) : Effect.succeed("viewer"),
+        }),
+      ],
+    });
+    const result = yield* service.list({
+      state: "open",
+      cursors: {
+        "github.com a/repo": "2026-07-02T00:00:00Z|1|1",
+        "github.example.com c/repo": "2026-07-02T00:00:00Z|1|1",
+      },
+    });
+    assert.strictEqual(
+      result.providers.find((host) => host.host === "github.com")?.detail,
+      requestFailed.detail,
+    );
+  }),
+);
+
+it.effect("marks a paused credential unreadable without pausing another account and recovers", () =>
+  Effect.gen(function* () {
+    const reads: string[] = [];
+    let limited = true;
+    const service = yield* makeService({
+      projects: ["a", "b"].map((name) =>
+        project({
+          id: name,
+          title: name,
+          workspaceRoot: `/${name}`,
+          repository: `${name}/repo`,
+        }),
+      ),
+      providers: [
+        fakeProvider("github", {
+          withVerifiedCredential: ({ cwd }, use) =>
+            use({
+              accountId: cwd,
+              viewer: cwd,
+              credentialFingerprint: cwd,
+            }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, cwd)),
+          listChangeRequests: ({ cwd }) =>
+            Effect.suspend(() => {
+              reads.push(cwd);
+              if (cwd === "/a" && limited)
+                return Effect.fail(
+                  new PullRequestProviderError({
+                    provider: "github",
+                    operation: "list",
+                    reason: "rate-limited",
+                    detail: "Try later.",
+                  }),
+                );
+              return Effect.succeed({
+                items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+                truncated: false,
+                continues: false,
+              });
+            }),
+        }),
+      ],
+    });
+    yield* service.list({ state: "open" });
+    reads.length = 0;
+    yield* service.invalidate({});
+    const paused = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(reads, ["/b"]);
+    assert.strictEqual(paused.viewers["github.com"], "/b");
+    assert.notProperty(paused.viewers, "a github.com");
+    assert.strictEqual(paused.viewers["b github.com"], "/b");
+    assert.deepStrictEqual(
+      paused.errors.map((error) => error.projectId),
+      ["a"],
+    );
+    limited = false;
+    yield* TestClock.adjust("31 seconds");
+    yield* service.invalidate({});
+    const recovered = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(recovered.entries.map((entry) => entry.projectId).sort(), ["a", "b"]);
+    assert.strictEqual(recovered.viewers["a github.com"], "/a");
+  }),
+);
+
+it.effect("refreshes viewer and statistics ownership after workspace credentials change", () =>
+  Effect.gen(function* () {
+    let account = "alice";
+    const service = yield* makeService({
+      projects: [project({ id: "a", title: "a", workspaceRoot: "/a", repository: "a/repo" })],
+      providers: [
+        fakeProvider("github", {
+          withVerifiedCredential: (_, use) =>
+            use({ accountId: account, viewer: account, credentialFingerprint: account }).pipe(
+              Effect.provideService(SourceControlRateLimit.CredentialScope, account),
+            ),
+          listChangeRequests: () =>
+            Effect.gen(function* () {
+              const viewer = yield* SourceControlRateLimit.CredentialScope;
+              return {
+                items: [
+                  {
+                    ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                    author: { login: viewer, name: null, avatarUrl: null },
+                  },
+                ],
+                truncated: false,
+                continues: false,
+              };
+            }),
+          listChangeRequestStats: ({ changeRequests }) =>
+            Effect.gen(function* () {
+              const viewer = yield* SourceControlRateLimit.CredentialScope;
+              return changeRequests.map((ref) => ({
+                ...ref,
+                additions: viewer === "alice" ? 1 : 2,
+                deletions: 0,
+              }));
+            }),
+        }),
+      ],
+    });
+    const first = yield* service.list({ state: "open" });
+    assert.strictEqual(first.viewers["a github.com"], "alice");
+    assert.strictEqual((yield* service.listStats({ refs: first.entries })).stats[0]?.additions, 1);
+    account = "bob";
+    yield* service.invalidate({});
+    const refreshed = yield* service.list({ state: "open" });
+    assert.strictEqual(refreshed.viewers["a github.com"], "bob");
+    assert.strictEqual(refreshed.entries[0]?.author?.login, "bob");
+    assert.strictEqual(
+      (yield* service.listStats({ refs: refreshed.entries })).stats[0]?.additions,
+      2,
+    );
+  }),
 );
 
 it.effect("keeps a failed workspace credential isolated and recovers after refresh", () =>
@@ -318,6 +573,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const commands: VcsProcess.VcsProcessInput[] = [];
+      const rateLimits = yield* SourceControlRateLimit.make;
       const response = (value: unknown) => ({
         exitCode: ChildProcessSpawner.ExitCode(0),
         stdout: typeof value === "string" ? value : encodeProcessResponse(value),
@@ -327,7 +583,8 @@ it.effect(
         stdoutInvalidUtf8: false,
       });
       const github = yield* GitHubCli.make.pipe(
-        Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer)),
+        Effect.provide(GitHubGraphQlBudget.layer),
+        Effect.provideService(SourceControlRateLimit.SourceControlRateLimit, rateLimits),
         Effect.provideService(VcsProcess.VcsProcess, {
           run: (input) =>
             Effect.sync(() => {
@@ -387,6 +644,7 @@ it.effect(
       const cli = yield* GitHubPullRequestCli.make.pipe(
         Effect.provideService(GitHubCli.GitHubCli, github),
         Effect.provide(GitHubGraphQlBudget.layer),
+        Effect.provideService(SourceControlRateLimit.SourceControlRateLimit, rateLimits),
       );
       const provider = yield* GitHubPullRequestProvider.make.pipe(
         Effect.provideService(GitHubPullRequestCli.GitHubPullRequestCli, cli),
@@ -401,6 +659,7 @@ it.effect(
           }),
         ),
         providers: [provider],
+        rateLimits,
       });
       const listed = yield* service.list({ state: "open", filters: { author: "@me" } });
       assert.deepStrictEqual(listed.entries.map((entry) => entry.projectId).sort(), [
@@ -431,6 +690,49 @@ it.effect(
           .map((command) => command.cwd),
         ["/b"],
       );
+      yield* cli.withVerifiedCredential({ cwd: "/b", host: "github.com" }, () =>
+        rateLimits.recordRateLimit({
+          provider: "github",
+          host: "github.com",
+          lease: 0,
+          retryAt: 20 * 60_000,
+        }),
+      );
+      yield* TestClock.adjust("11 minutes");
+      yield* service.invalidate({});
+      const beforePaused = commands.length;
+      const paused = yield* service.list({ state: "open", filters: { author: "@me" } });
+      assert.deepStrictEqual(paused.entries.map((entry) => entry.projectId).sort(), ["a", "c"]);
+      const pausedStats = yield* service.listStats({ refs: listed.entries });
+      assert.deepStrictEqual(pausedStats.stats.map((entry) => entry.projectId).sort(), ["a", "c"]);
+      const rejected = yield* Effect.flip(
+        service.withRoutingCredential(
+          {
+            projectId: "b" as ProjectId,
+            repository: "b/repo",
+            number: 1,
+            host: "github.com",
+            expectedAccountId: "2",
+          },
+          Effect.die("An unverified action must not run"),
+        ),
+      );
+      assert.strictEqual(rejected._tag, "PullRequestOperationError");
+      if (rejected._tag === "PullRequestOperationError") assert.include(rejected.detail, "paused");
+      assert.isTrue(
+        commands
+          .slice(beforePaused)
+          .filter((command) => command.cwd === "/b")
+          .every((command) => command.args[0] === "auth"),
+      );
+      yield* TestClock.adjust("10 minutes");
+      yield* service.invalidate({});
+      const recovered = yield* service.list({ state: "open", filters: { author: "@me" } });
+      assert.deepStrictEqual(recovered.entries.map((entry) => entry.projectId).sort(), [
+        "a",
+        "b",
+        "c",
+      ]);
     }),
 );
 
@@ -715,9 +1017,11 @@ function fakeProvider(
   };
 }
 
+/** Build an isolated service with optional shared rate limits for integrated provider tests. */
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
+  readonly rateLimits?: SourceControlRateLimit.SourceControlRateLimit["Service"];
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
@@ -746,7 +1050,9 @@ function makeService(input: {
         Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
           resolve: input.resolveRepositoryIdentity ?? (() => Effect.succeed(null)),
         }),
-        SourceControlRateLimit.layer,
+        input.rateLimits === undefined
+          ? SourceControlRateLimit.layer
+          : Layer.succeed(SourceControlRateLimit.SourceControlRateLimit, input.rateLimits),
         // The real store over a database of its own, so the environment-kept marks are exercised
         // through the SQL that holds them rather than through a stand-in that agrees with itself.
         PullRequestFilesViewed.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
@@ -2028,6 +2334,8 @@ it.effect("keeps two hosts of one provider kind as two accounts", () =>
     assert.deepStrictEqual(result.viewers, {
       "github.com": "bilal",
       "github.acme.dev": "b.hassan",
+      "p1 github.com": "bilal",
+      "p2 github.acme.dev": "b.hassan",
     });
     assert.deepStrictEqual(result.entries.map((entry) => entry.host).toSorted(), [
       "github.acme.dev",

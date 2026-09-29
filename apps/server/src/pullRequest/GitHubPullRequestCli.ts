@@ -1089,9 +1089,13 @@ function actionArgs(
   }
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * Construct GitHub pull request reads and mutations with credential-pinned batching.
+ * @public Service construction is part of the canonical Effect module API.
+ */
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
+  const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const graphQlBudget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
   const revalidateChecks = yield* makeChecksRevalidator;
   const routingIdentities = new Map<
@@ -1147,6 +1151,11 @@ export const make = Effect.gen(function* () {
               const cached = routingIdentities.get(key);
               if (cached !== undefined && now - cached.at < 10 * 60_000)
                 return { ...credential, ...cached.value };
+              // Cached verification spends no quota. A cold verification respects this
+              // account's pause before calling the network, just like repository reads.
+              yield* rateLimits
+                .check({ provider: "github", host })
+                .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, key));
               // Pin this read so an auth switch cannot poison its cache entry.
               const response = yield* github
                 .execute({
