@@ -179,7 +179,9 @@ export function BranchToolbarBranchSelector({
   const setThreadBranch = useCallback(
     (branch: string | null, worktreePath: string | null, automatic = false) => {
       if (!activeThreadId || !activeProject) return;
-      if (serverSession && worktreePath !== activeWorktreePath) {
+      // selectBranch calls this after an awaited checkout, so the session from render can be stale.
+      const latestSession = readThreadShell(threadRef)?.session ?? null;
+      if (latestSession && worktreePath !== activeWorktreePath) {
         void stopThreadSession({
           environmentId,
           input: { threadId: activeThreadId },
@@ -215,7 +217,6 @@ export function BranchToolbarBranchSelector({
     [
       activeThreadId,
       activeProject,
-      serverSession,
       activeWorktreePath,
       hasServerThread,
       onActiveThreadBranchOverrideChange,
