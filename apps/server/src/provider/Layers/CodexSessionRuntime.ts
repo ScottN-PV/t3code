@@ -501,6 +501,7 @@ export function makeCodexServerNotification<M extends CodexRpc.ServerNotificatio
   return notification;
 }
 
+/** Normalizes the model slug while preserving an explicitly preferred Codex model identifier. */
 function normalizeCodexModelSlug(
   model: string | undefined | null,
   preferredId?: string,

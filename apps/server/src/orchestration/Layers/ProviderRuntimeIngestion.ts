@@ -164,6 +164,7 @@ type RuntimeIngestionInput =
       processed: Deferred.Deferred<void>;
     };
 
+/** Normalizes a present provider turn identifier while preserving a missing identifier. */
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.make(String(value));
 }
@@ -486,6 +487,7 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
   return fields;
 }
 
+/** Maps provider events to thread activities, omitting events without an activity representation. */
 export function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
   taskTitle?: string,
