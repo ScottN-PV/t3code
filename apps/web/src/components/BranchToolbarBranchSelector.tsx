@@ -32,7 +32,7 @@ import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { shouldLoadNextBranchPageAfterScroll } from "../state/paginatedBranches";
 import { usePaginatedBranches } from "../state/queries";
-import { useProject, useThreadShell } from "../state/entities";
+import { readThreadShell, useProject, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -49,6 +49,7 @@ import {
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  isWorktreeChangeBlocked,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
 } from "./BranchToolbar.logic";
@@ -96,6 +97,8 @@ interface BranchToolbarBranchSelectorProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
 }
+
+const WORKTREE_CHANGE_BLOCKED_MESSAGE = "Stop the current turn to switch worktrees.";
 
 function toBranchActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
@@ -285,6 +288,18 @@ export function BranchToolbarBranchSelector({
   const prReference = parsePullRequestReference(trimmedBranchQuery);
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
+  const isWorktreeChangeBlockedForRef = (refName: VcsRef) =>
+    activeProjectCwd !== null &&
+    !isSelectingWorktreeBase &&
+    isWorktreeChangeBlocked({
+      session: serverSession,
+      currentWorktreePath: activeWorktreePath,
+      nextWorktreePath: resolveBranchSelectionTarget({
+        activeProjectCwd,
+        activeWorktreePath,
+        refName,
+      }).nextWorktreePath,
+    });
   const checkoutPullRequestItemValue =
     prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
   const canCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
@@ -422,6 +437,9 @@ export function BranchToolbarBranchSelector({
       return;
     }
 
+    // Enter selects the highlighted value directly, so disabled rows need this too.
+    if (isWorktreeChangeBlockedForRef(refName)) return;
+
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
       activeWorktreePath,
@@ -453,6 +471,25 @@ export function BranchToolbarBranchSelector({
         },
       });
       if (checkoutResult._tag === "Success") {
+        // A turn can start while the checkout runs. Leave the thread where it is.
+        const latestThread = readThreadShell(threadRef);
+        if (
+          isWorktreeChangeBlocked({
+            session: latestThread?.session ?? null,
+            currentWorktreePath: latestThread?.worktreePath ?? activeWorktreePath,
+            nextWorktreePath: selectionTarget.nextWorktreePath,
+          })
+        ) {
+          setOptimisticBranch(previousBranch);
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: WORKTREE_CHANGE_BLOCKED_MESSAGE,
+              description: `Checked out ${refName.name}, but this thread stayed in its current worktree.`,
+            }),
+          );
+          return;
+        }
         const nextBranchName = refName.isRemote
           ? (checkoutResult.value.refName ?? selectedBranchName)
           : selectedBranchName;
@@ -752,6 +789,7 @@ export function BranchToolbarBranchSelector({
         key={itemValue}
         index={index}
         value={itemValue}
+        disabled={isWorktreeChangeBlockedForRef(refName)}
         onClick={() => selectPickerItem(itemValue)}
         onContextMenu={(event) => handleBranchContextMenu(event, itemValue)}
       >
@@ -873,6 +911,9 @@ export function BranchToolbarBranchSelector({
                       : "branch"
                 }
                 renderItem={({ item, index }) => renderPickerItem(item, index)}
+                // LegendList re-renders mounted rows only when their item or extraData changes.
+                // Their disabled state and click handler depend on the session and worktree.
+                extraData={`${serverSession?.status ?? ""}:${activeWorktreePath ?? ""}`}
                 estimatedItemSize={28}
                 drawDistance={336}
                 onLayout={() => {
@@ -922,6 +963,9 @@ export function BranchToolbarBranchSelector({
                 branch.
               </TooltipPopup>
             </Tooltip>
+          ) : null}
+          {refs.some(isWorktreeChangeBlockedForRef) ? (
+            <ComboboxStatus>{WORKTREE_CHANGE_BLOCKED_MESSAGE}</ComboboxStatus>
           ) : null}
           {branchStatusText ? <ComboboxStatus>{branchStatusText}</ComboboxStatus> : null}
         </div>

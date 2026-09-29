@@ -1,11 +1,13 @@
 import type {
   EnvironmentId,
   EnvironmentMachineKind,
+  OrchestrationSession,
   VcsRef,
   ProjectId,
   WorktreeSubmodules,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { isThreadSessionRunning } from "@t3tools/client-runtime/state/threads";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
@@ -286,6 +288,18 @@ export function resolveBranchSelectionTarget(input: {
     nextWorktreePath,
     reuseExistingWorktree: false,
   };
+}
+
+// Moving a thread to another worktree stops its provider session, because the
+// process is bound to the old cwd. Mid-turn that would silently end the turn.
+export function isWorktreeChangeBlocked(input: {
+  session: OrchestrationSession | null;
+  currentWorktreePath: string | null;
+  nextWorktreePath: string | null;
+}): boolean {
+  return (
+    input.nextWorktreePath !== input.currentWorktreePath && isThreadSessionRunning(input.session)
+  );
 }
 
 export function shouldIncludeBranchPickerItem(input: {

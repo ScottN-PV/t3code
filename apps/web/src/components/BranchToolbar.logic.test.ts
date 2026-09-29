@@ -1,8 +1,15 @@
-import { EnvironmentId, type VcsRef } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type OrchestrationSession,
+  type OrchestrationSessionStatus,
+  type VcsRef,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
+  isWorktreeChangeBlocked,
   resolveEnvironmentOptionLabel,
   resolveBranchSelectionTarget,
   resolveCurrentWorkspaceLabel,
@@ -856,5 +863,79 @@ describe("sanitizeNewRefName", () => {
   it("does not collapse dashes the user typed", () => {
     expect(sanitizeNewRefName("new - branch")).toBe("new---branch");
     expect(sanitizeNewRefName("foo--bar")).toBe("foo--bar");
+  });
+});
+
+describe("isWorktreeChangeBlocked", () => {
+  const session = (status: OrchestrationSessionStatus): OrchestrationSession => ({
+    threadId: ThreadId.make("thread-1"),
+    status,
+    providerName: "codex",
+    runtimeMode: "full-access",
+    activeTurnId: null,
+    lastError: null,
+    updatedAt: "2026-09-29T00:00:00.000Z",
+  });
+  const secondaryWorktree = "/repo/.t3/worktrees/feature-a";
+
+  it.each(["starting", "running"] as const)("blocks a worktree change while %s", (status) => {
+    expect(
+      isWorktreeChangeBlocked({
+        session: session(status),
+        currentWorktreePath: null,
+        nextWorktreePath: secondaryWorktree,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows a worktree change once the turn has finished", () => {
+    expect(
+      isWorktreeChangeBlocked({
+        session: session("ready"),
+        currentWorktreePath: null,
+        nextWorktreePath: secondaryWorktree,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows a worktree change when the thread has no session", () => {
+    expect(
+      isWorktreeChangeBlocked({
+        session: null,
+        currentWorktreePath: null,
+        nextWorktreePath: secondaryWorktree,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["the main checkout", null],
+    ["a secondary worktree", secondaryWorktree],
+  ])("allows staying in %s mid-turn", (_label, worktreePath) => {
+    expect(
+      isWorktreeChangeBlocked({
+        session: session("running"),
+        currentWorktreePath: worktreePath,
+        nextWorktreePath: worktreePath,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["a ref checked out in the main repo", { isDefault: false, worktreePath: "/repo" }],
+    ["the default ref with no checkout", { isDefault: true, worktreePath: null }],
+  ])("blocks returning to the main checkout via %s mid-turn", (_label, refName) => {
+    const { nextWorktreePath } = resolveBranchSelectionTarget({
+      activeProjectCwd: "/repo",
+      activeWorktreePath: secondaryWorktree,
+      refName,
+    });
+    expect(
+      isWorktreeChangeBlocked({
+        session: session("running"),
+        currentWorktreePath: secondaryWorktree,
+        nextWorktreePath,
+      }),
+    ).toBe(true);
   });
 });
