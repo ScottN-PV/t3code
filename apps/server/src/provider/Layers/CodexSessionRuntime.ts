@@ -1366,7 +1366,7 @@ export const makeCodexSessionRuntime = (
       Effect.provide(clientContext),
     );
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
-    const refreshMcpBeforeTurn = yield* makeCodexMcpStartup(client);
+    const refreshMcpBeforeTurn = yield* makeCodexMcpStartup().pipe(Effect.provide(clientContext));
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = (purpose: CodexErrors.CodexAppServerIdentifierPurpose) =>
       crypto.randomUUIDv4.pipe(

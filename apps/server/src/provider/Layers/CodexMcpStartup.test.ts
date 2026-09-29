@@ -4,8 +4,10 @@ import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import type * as CodexClient from "effect-codex-app-server/client";
+import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
@@ -37,6 +39,14 @@ const makePeer = Effect.fnUntraced(function* (
   let pageIndex = 0;
   const requests: Array<{ method: string; params: unknown }> = [];
   const client = {
+    raw: {
+      notifications: Stream.empty,
+      requests: Stream.empty,
+      request: () => Effect.die("Unexpected raw request"),
+      notify: () => Effect.die("Unexpected raw notification"),
+      respond: () => Effect.die("Unexpected raw response"),
+      respondError: () => Effect.die("Unexpected raw error response"),
+    },
     request: ((method, params) => {
       requests.push({ method, params });
       if (method === "config/mcpServer/reload") return reload;
@@ -52,7 +62,9 @@ const makePeer = Effect.fnUntraced(function* (
         handler = onUpdate as typeof handler;
       })) as Client["handleServerNotification"],
   };
-  const refresh = yield* makeCodexMcpStartup(client);
+  const refresh = yield* makeCodexMcpStartup().pipe(
+    Effect.provide(Layer.mock(CodexClient.CodexAppServerClient)(client)),
+  );
   return { refresh, listed, requests, emit: (update: Update) => handler(update) };
 });
 
@@ -87,19 +99,20 @@ it.effect("waits for every paginated server, ignoring stale snapshots and other 
 );
 
 it.effect(
-  "ignores a preceding startup's delayed terminal update until each server starts again",
+  "a later starting update supersedes a terminal update received before inventory completes",
   () =>
     Effect.gen(function* () {
-      const peer = yield* makePeer([{ data: [server("tools", "connected")] }]);
+      const reloading = yield* Deferred.make<void>();
+      const peer = yield* makePeer(
+        [{ data: [server("tools", "connected")] }],
+        Deferred.await(reloading),
+      );
       const turn = yield* peer.refresh("root").pipe(Effect.forkChild);
-      yield* Deferred.await(peer.listed);
+      yield* TestClock.adjust("1 second");
       yield* peer.emit({ threadId: "root", name: "tools", status: "ready" });
-      yield* TestClock.adjust("1 second");
-      NodeAssert.equal(turn.pollUnsafe(), undefined);
-      yield* peer.emit({ threadId: "root", name: "tools", status: "failed" });
-      yield* TestClock.adjust("1 second");
-      NodeAssert.equal(turn.pollUnsafe(), undefined);
       yield* peer.emit({ threadId: "root", name: "tools", status: "starting" });
+      yield* Deferred.succeed(reloading, undefined);
+      yield* Deferred.await(peer.listed);
       yield* TestClock.adjust("1 second");
       NodeAssert.equal(turn.pollUnsafe(), undefined);
       yield* peer.emit({ threadId: "root", name: "tools", status: "ready" });
@@ -157,6 +170,57 @@ it.effect("proceeds immediately when there are no enabled servers", () =>
     const peer = yield* makePeer([{ data: [server("off", "disabled")] }]);
     yield* peer.refresh("root");
   }),
+);
+
+it.effect("accepts a reused connection's ready update without another starting update", () =>
+  Effect.gen(function* () {
+    const peer = yield* makePeer([{ data: [server("tools", "connected")] }]);
+    const first = yield* peer.refresh("root").pipe(Effect.forkChild);
+    yield* Deferred.await(peer.listed);
+    yield* peer.emit({ threadId: "root", name: "tools", status: "starting" });
+    yield* peer.emit({ threadId: "root", name: "tools", status: "ready" });
+    yield* Fiber.join(first);
+    const second = yield* peer.refresh("root").pipe(Effect.forkChild);
+    yield* TestClock.adjust("1 second");
+    yield* peer.emit({ threadId: "root", name: "tools", status: "ready" });
+    yield* TestClock.adjust("1 second");
+    NodeAssert.notEqual(second.pollUnsafe(), undefined);
+    yield* Fiber.join(second);
+  }),
+);
+
+it.effect("keeps a reused connection's ready update received before the reload reply", () =>
+  Effect.gen(function* () {
+    const reloading = yield* Deferred.make<void>();
+    const peer = yield* makePeer(
+      [{ data: [server("tools", "connected")] }],
+      Deferred.await(reloading),
+    );
+    const turn = yield* peer.refresh("root").pipe(Effect.forkChild);
+    yield* TestClock.adjust("1 second");
+    yield* peer.emit({ threadId: "root", name: "tools", status: "ready" });
+    yield* Deferred.succeed(reloading, undefined);
+    yield* Fiber.join(turn);
+  }),
+);
+
+it.effect(
+  "does not accept a terminal update without a starting boundary or connected inventory",
+  () =>
+    Effect.gen(function* () {
+      const peer = yield* makePeer([{ data: [server("tools")] }]);
+      const turn = yield* peer.refresh("root").pipe(Effect.forkChild);
+      yield* Deferred.await(peer.listed);
+      yield* peer.emit({ threadId: "root", name: "tools", status: "ready" });
+      yield* TestClock.adjust("1 second");
+      NodeAssert.equal(turn.pollUnsafe(), undefined);
+      yield* peer.emit({ threadId: "root", name: "tools", status: "failed" });
+      yield* TestClock.adjust("1 second");
+      NodeAssert.equal(turn.pollUnsafe(), undefined);
+      yield* peer.emit({ threadId: "root", name: "tools", status: "starting" });
+      yield* peer.emit({ threadId: "root", name: "tools", status: "ready" });
+      yield* Fiber.join(turn);
+    }),
 );
 
 it.effect("continues when the reload fails", () =>
