@@ -698,6 +698,7 @@ function shouldPreferSshRemote(url: string | null): boolean {
   return isSshRemoteUrl(url);
 }
 
+/** Copies available fork and head-repository details without introducing undefined fields. */
 function toPullRequestHeadRemoteInfo(pr: {
   isCrossRepository?: boolean | undefined;
   headRepositoryNameWithOwner?: string | null | undefined;
