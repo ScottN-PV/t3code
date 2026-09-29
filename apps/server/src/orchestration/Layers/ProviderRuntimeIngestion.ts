@@ -1036,6 +1036,7 @@ export function runtimeEventToActivities(
   return [];
 }
 
+/** Creates scoped lifecycle and diff workers, keeping repository probes off the lifecycle queue. */
 const make = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
@@ -2653,6 +2654,7 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /** Dispatches a queued event and acknowledges each diff when its lifecycle work finishes. */
   const processInput = (input: RuntimeIngestionInput) => {
     switch (input.source) {
       case "runtime":
@@ -2687,9 +2689,10 @@ const make = Effect.gen(function* () {
     processInput(input).pipe(logIngestionFailure(input.source, input.event)),
   );
 
-  // Repository detection for a diff goes through VCS subprocesses, which can
-  // stall behind slow or hung git. It runs on its own worker so a stuck diff
-  // never delays the lifecycle worker; confirmed diffs are handed back to it.
+  /**
+   * Probes the repository off the lifecycle queue, then waits only for this diff's
+   * lifecycle work so unrelated queued events cannot prevent other diff keys advancing.
+   */
   const detectProviderDiffRepository = Effect.fn("detectProviderDiffRepository")(function* (
     event: ProviderDiffEvent,
   ) {
@@ -2712,6 +2715,7 @@ const make = Effect.gen(function* () {
       detectProviderDiffRepository(event).pipe(logIngestionFailure("diff", event)),
   });
 
+  /** Subscribes to runtime and domain events, coalescing diff signals per thread and turn. */
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
       yield* forkParked(

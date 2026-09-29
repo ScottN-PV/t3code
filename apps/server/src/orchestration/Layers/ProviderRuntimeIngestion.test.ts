@@ -291,6 +291,7 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
+  /** Creates an isolated repository and ingestion runtime with controllable dispatch and Git probes. */
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
     threadTitle?: string;
