@@ -742,6 +742,7 @@ function toPullRequestHeadRemoteInfo(pr: {
   };
 }
 
+/** Assembles Git status and PR caches plus ordered commit, push, and PR actions over the VCS driver. */
 export const make = Effect.gen(function* () {
   const gitCore = yield* GitVcsDriver.GitVcsDriver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
@@ -1932,6 +1933,7 @@ export const make = Effect.gen(function* () {
       );
   });
 
+  /** Uses a custom commit message or generates commit and optional branch text with the selected writer. */
   const resolveCommitAndBranchSuggestion = Effect.fn("resolveCommitAndBranchSuggestion")(
     function* (input: {
       cwd: string;
@@ -2099,6 +2101,7 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  /** Reuses an existing PR or generates its title and body with the selected writer before creation. */
   const runPrStep = Effect.fn("runPrStep")(function* (
     settings: SourceControlTextGenerationSettings,
     cwd: string,
@@ -2740,6 +2743,7 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  /** Runs branch, commit, push, and PR steps in order, reporting progress and generation model context. */
   const runStackedAction: GitManager["Service"]["runStackedAction"] = Effect.fn("runStackedAction")(
     function* (input, options) {
       const progress = yield* createProgressEmitter(input, options);

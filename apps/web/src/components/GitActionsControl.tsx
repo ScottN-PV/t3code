@@ -74,6 +74,7 @@ import {
   resolveLiveThreadBranchUpdate,
   resolveThreadBranchMetadataPatch,
   resolveQuickAction,
+  resolveGitActionSettingsScope,
   resolveThreadBranchUpdate,
 } from "./GitActionsControl.logic";
 import { WizardPopup, WizardHeader, WizardSteps, WizardPanel, WizardFooter } from "./ui/wizard";
@@ -117,8 +118,7 @@ import {
 import { readProjects, useThreadProjection, useThreadShell } from "~/state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { getClientSettings } from "~/hooks/useSettings";
-import { derivePhysicalProjectKey, selectProjectGroupingSettings } from "~/logicalProject";
-import { buildPhysicalToLogicalProjectKeyMap } from "~/sidebarProjectGrouping";
+import { selectProjectGroupingSettings } from "~/logicalProject";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
@@ -536,6 +536,7 @@ interface PublishRepositoryDialogProps {
   readonly gitCwd: string;
 }
 
+/** Guides repository publication through provider selection, credentials, and repository details. */
 function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const openLink = useOpenLink(props.threadRef);
   const navigate = useNavigate();
@@ -1412,29 +1413,18 @@ export default function GitActionsControl({
             title: "Action failed",
             description: error instanceof Error ? error.message : "An error occurred.",
             timeout: errorToastTiming.timeout,
-            ...(isTextGenerationError(error)
+            ...(isTextGenerationError(error) && activeEnvironmentId !== null && gitCwd !== null
               ? {
                   actionProps: {
                     children: "Settings",
                     onClick: () => {
-                      const projectId =
-                        activeServerThread?.projectId ?? activeDraftThread?.projectId;
-                      const projects = readProjects();
-                      const settingsProject = projects.find(
-                        (project) =>
-                          project.environmentId === activeEnvironmentId &&
-                          (projectId ? project.id === projectId : project.workspaceRoot === gitCwd),
-                      );
-                      const checkout = settingsProject
-                        ? derivePhysicalProjectKey(settingsProject)
-                        : undefined;
-                      const project = checkout
-                        ? buildPhysicalToLogicalProjectKeyMap({
-                            projects,
-                            settings: selectProjectGroupingSettings(getClientSettings()),
-                            primaryEnvironmentId: activeEnvironmentId,
-                          }).get(checkout)
-                        : undefined;
+                      const search = resolveGitActionSettingsScope({
+                        environmentId: activeEnvironmentId,
+                        projectId: activeServerThread?.projectId ?? activeDraftThread?.projectId,
+                        gitCwd,
+                        projects: readProjects(),
+                        groupingSettings: selectProjectGroupingSettings(getClientSettings()),
+                      });
                       if (errorToastId !== null) toastManager.close(errorToastId);
                       void navigate({
                         to:
@@ -1445,11 +1435,7 @@ export default function GitActionsControl({
                           modelSetting === "sourceControlWriterModelSelection"
                             ? "source-control-writer-model"
                             : "text-generation-model",
-                        search: {
-                          machine: activeEnvironmentId ?? undefined,
-                          project,
-                          checkout,
-                        },
+                        search,
                       });
                     },
                   },
