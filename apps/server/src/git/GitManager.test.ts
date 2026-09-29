@@ -688,6 +688,7 @@ function resolvePullRequest(
   return manager.resolvePullRequest(input);
 }
 
+/** Invokes PR thread preparation through the configured test manager. */
 function preparePullRequestThread(
   manager: GitManager.GitManager["Service"],
   input: GitPreparePullRequestThreadInput,
