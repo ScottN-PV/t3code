@@ -88,7 +88,6 @@ describe("generation failure settings scope", () => {
   });
 });
 
-/** Builds a clean feature-branch status with overrides for each Git action scenario. */
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
   return {
     isRepo: true,
