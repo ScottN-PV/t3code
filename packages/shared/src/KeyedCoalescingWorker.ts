@@ -25,7 +25,6 @@ interface KeyedCoalescingWorkerState<K, V> {
   readonly activeKeys: Set<K>;
 }
 
-/** Creates a scoped, serial worker that merges pending values per key and exposes per-key and whole-worker drains. */
 export const makeKeyedCoalescingWorker = <K, V, E, R>(options: {
   readonly merge: (current: V, next: V) => V;
   readonly process: (key: K, value: V) => Effect.Effect<void, E, R>;
@@ -38,7 +37,6 @@ export const makeKeyedCoalescingWorker = <K, V, E, R>(options: {
       activeKeys: new Set(),
     });
 
-    /** Processes a key until no merged value remains, then marks it idle. */
     const processKey = (key: K, value: V): Effect.Effect<void, E, R> =>
       options.process(key, value).pipe(
         Effect.flatMap(() =>
@@ -60,7 +58,6 @@ export const makeKeyedCoalescingWorker = <K, V, E, R>(options: {
         ),
       );
 
-    /** Releases a failed key and requeues any value that arrived while it was active. */
     const cleanupFailedKey = (key: K): Effect.Effect<void> =>
       TxRef.modify(stateRef, (state) => {
         const activeKeys = new Set(state.activeKeys);
@@ -113,7 +110,6 @@ export const makeKeyedCoalescingWorker = <K, V, E, R>(options: {
       Effect.forkScoped,
     );
 
-    /** Merges a pending value atomically, queueing the key only when it is not already scheduled. */
     const enqueue: KeyedCoalescingWorker<K, V>["enqueue"] = (key, value) =>
       TxRef.modify(stateRef, (state) => {
         const latestByKey = new Map(state.latestByKey);
@@ -133,7 +129,6 @@ export const makeKeyedCoalescingWorker = <K, V, E, R>(options: {
         Effect.asVoid,
       );
 
-    /** Waits for this key's queued, active, and merged work without waiting for other keys. */
     const drainKey: KeyedCoalescingWorker<K, V>["drainKey"] = (key) =>
       TxRef.get(stateRef).pipe(
         Effect.tap((state) =>

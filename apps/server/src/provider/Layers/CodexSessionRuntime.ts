@@ -479,7 +479,6 @@ type CodexServerNotification = {
   };
 }[CodexRpc.ServerNotificationMethod];
 
-/** Strips diff snapshot text before queueing while preserving the native notification shape. */
 export function makeCodexServerNotification<M extends CodexRpc.ServerNotificationMethod>(
   method: M,
   params: CodexRpc.ServerNotificationParamsByMethod[M],
@@ -501,7 +500,6 @@ export function makeCodexServerNotification<M extends CodexRpc.ServerNotificatio
   return notification;
 }
 
-/** Normalizes the model slug while preserving an explicitly preferred Codex model identifier. */
 function normalizeCodexModelSlug(
   model: string | undefined | null,
   preferredId?: string,

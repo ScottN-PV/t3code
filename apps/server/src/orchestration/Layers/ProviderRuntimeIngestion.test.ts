@@ -218,7 +218,6 @@ type ProviderRuntimeTestProposedPlan = ProviderRuntimeTestThread["proposedPlans"
 type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][number];
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
-/** Waits for a thread snapshot to satisfy the predicate, failing when the deadline expires. */
 async function waitForThread(
   readModel: () => Promise<ProviderRuntimeTestReadModel>,
   predicate: (thread: ProviderRuntimeTestThread) => boolean,
@@ -292,7 +291,6 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  /** Creates an isolated repository and ingestion runtime with controllable dispatch and Git probes. */
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
     threadTitle?: string;
@@ -394,6 +392,8 @@ describe("ProviderRuntimeIngestion", () => {
     const drain = () => testRuntime.runPromise(ingestion.drain);
     const dispatch = (command: OrchestrationCommand) =>
       testRuntime.runPromise(engine.dispatch(command));
+    const emitAndWaitForEnqueue = (events: ReadonlyArray<LegacyProviderRuntimeEvent>) =>
+      testRuntime.runPromise(provider.emitAndWaitForEnqueue(events));
     const emitAndDrain = (events: ReadonlyArray<LegacyProviderRuntimeEvent>) =>
       testRuntime.runPromise(
         provider.emitAndWaitForEnqueue(events).pipe(Effect.andThen(ingestion.drain)),
@@ -472,6 +472,7 @@ describe("ProviderRuntimeIngestion", () => {
       advanceClock: (ms: number) => {
         clockOffsetMs += ms;
       },
+      emitAndWaitForEnqueue,
       emitAndDrain,
       sqlCount: sqlCounter.count,
       setProviderSession: provider.setSession,
@@ -4230,6 +4231,163 @@ describe("ProviderRuntimeIngestion", () => {
       expect(
         snapshot.threads.find((thread) => thread.id === second.threadId)?.checkpoints,
       ).toHaveLength(1);
+    }),
+  );
+
+  effectIt.effect("keeps a diff key coalesced behind blocked lifecycle work", () =>
+    Effect.gen(function* () {
+      const firstDetection = yield* Deferred.make<void>();
+      const lifecycleBlocked = yield* Deferred.make<void>();
+      const releaseLifecycle = yield* Deferred.make<void>();
+      let detectionCount = 0;
+      let blockLifecycle = false;
+      const dispatched: string[] = [];
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          isGitRepository: () =>
+            Effect.gen(function* () {
+              if (++detectionCount === 1) yield* Deferred.succeed(firstDetection, undefined);
+              return true;
+            }),
+          beforeDispatch: (command) => {
+            if (!blockLifecycle) return Effect.void;
+            if (
+              command.type === "thread.session.set" ||
+              command.type === "thread.message.assistant.complete" ||
+              command.type === "thread.turn.diff.complete"
+            ) {
+              dispatched.push(`${command.type}:${command.threadId}`);
+            }
+            return command.type === "thread.session.set"
+              ? Deferred.succeed(lifecycleBlocked, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseLifecycle)),
+                )
+              : Effect.void;
+          },
+        }),
+      );
+      yield* Effect.addFinalizer(() => Deferred.succeed(releaseLifecycle, undefined));
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      yield* Effect.promise(() =>
+        harness.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-backlog-thread"),
+          threadId: asThreadId("thread-2"),
+          projectId: asProjectId("project-1"),
+          title: "Second thread",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      const first = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt,
+      };
+      const second = { ...first, threadId: asThreadId("thread-2"), turnId: asTurnId("turn-2") };
+      yield* Effect.promise(() =>
+        harness.emitAndDrain([
+          { ...first, type: "turn.started", eventId: asEventId("start-first") },
+          { ...second, type: "turn.started", eventId: asEventId("start-second") },
+        ]),
+      );
+
+      blockLifecycle = true;
+      harness.emit({
+        ...first,
+        type: "session.state.changed",
+        eventId: asEventId("blocked-state"),
+        payload: { state: "running" },
+      });
+      yield* Deferred.await(lifecycleBlocked);
+      yield* Effect.promise(() =>
+        harness.emitAndWaitForEnqueue([
+          {
+            ...second,
+            type: "item.completed",
+            eventId: asEventId("backlog-reply"),
+            itemId: asItemId("backlog-reply"),
+            payload: {
+              itemType: "assistant_message",
+              status: "completed",
+              detail: "Second reply.",
+            },
+          },
+        ]),
+      );
+      // Lifecycle backlog is now queued, so this diff's lifecycle item lands behind it.
+      yield* Effect.promise(() =>
+        harness.emitAndWaitForEnqueue([
+          {
+            ...first,
+            type: "turn.diff.updated",
+            eventId: asEventId("diff-first-0"),
+            payload: { unifiedDiff: "first 0" },
+          },
+        ]),
+      );
+      yield* Deferred.await(firstDetection);
+      for (let index = 1; index <= 20; index++) {
+        yield* Effect.promise(() =>
+          harness.emitAndWaitForEnqueue([
+            {
+              ...first,
+              type: "turn.diff.updated",
+              eventId: asEventId(`diff-first-${index}`),
+              payload: { unifiedDiff: `first ${index}` },
+            },
+          ]),
+        );
+      }
+      yield* Effect.promise(() =>
+        harness.emitAndWaitForEnqueue([
+          {
+            ...second,
+            type: "turn.diff.updated",
+            eventId: asEventId("diff-second"),
+            payload: { unifiedDiff: "second" },
+          },
+        ]),
+      );
+      // The active key waits for its own lifecycle item, so repeated signals merge
+      // and the second key stays queued behind it.
+      expect(detectionCount).toBe(1);
+
+      yield* Deferred.succeed(releaseLifecycle, undefined);
+      yield* Effect.promise(harness.drain);
+      // One extra probe for the merged signal, then one for the second key.
+      expect(detectionCount).toBe(3);
+      expect(dispatched).toEqual([
+        "thread.session.set:thread-1",
+        "thread.message.assistant.complete:thread-2",
+        "thread.turn.diff.complete:thread-1",
+        "thread.turn.diff.complete:thread-2",
+      ]);
+      const snapshot = yield* Effect.promise(harness.readModel);
+      const firstThread = snapshot.threads.find((thread) => thread.id === first.threadId);
+      const secondThread = snapshot.threads.find((thread) => thread.id === second.threadId);
+      expect(firstThread?.checkpoints).toEqual([
+        expect.objectContaining({
+          turnId: first.turnId,
+          checkpointRef: "provider-diff:diff-first-0",
+          checkpointTurnCount: 1,
+        }),
+      ]);
+      expect(secondThread?.checkpoints).toEqual([
+        expect.objectContaining({
+          turnId: second.turnId,
+          checkpointRef: "provider-diff:diff-second",
+          checkpointTurnCount: 1,
+        }),
+      ]);
+      expect(secondThread?.messages).toEqual(
+        expect.arrayContaining([expect.objectContaining({ text: "Second reply." })]),
+      );
     }),
   );
 

@@ -164,7 +164,6 @@ type RuntimeIngestionInput =
       processed: Deferred.Deferred<void>;
     };
 
-/** Normalizes a present provider turn identifier while preserving a missing identifier. */
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.make(String(value));
 }
@@ -487,7 +486,6 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
   return fields;
 }
 
-/** Maps provider events to thread activities, omitting events without an activity representation. */
 export function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
   taskTitle?: string,
@@ -1038,7 +1036,6 @@ export function runtimeEventToActivities(
   return [];
 }
 
-/** Creates scoped lifecycle and diff workers, keeping repository probes off the lifecycle queue. */
 const make = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
@@ -2656,7 +2653,6 @@ const make = Effect.gen(function* () {
     });
   });
 
-  /** Dispatches a queued event and acknowledges each diff when its lifecycle work finishes. */
   const processInput = (input: RuntimeIngestionInput) => {
     switch (input.source) {
       case "runtime":
@@ -2691,10 +2687,9 @@ const make = Effect.gen(function* () {
     processInput(input).pipe(logIngestionFailure(input.source, input.event)),
   );
 
-  /**
-   * Probes the repository off the lifecycle queue, then waits only for this diff's
-   * lifecycle work so unrelated queued events cannot prevent other diff keys advancing.
-   */
+  // Repository detection for a diff goes through VCS subprocesses, which can
+  // stall behind slow or hung git. It runs on its own worker so a stuck diff
+  // never delays the lifecycle worker; confirmed diffs are handed back to it.
   const detectProviderDiffRepository = Effect.fn("detectProviderDiffRepository")(function* (
     event: ProviderDiffEvent,
   ) {
@@ -2706,9 +2701,9 @@ const make = Effect.gen(function* () {
     if (!workspaceCwd || !(yield* checkpointStore.isGitRepository(workspaceCwd))) return;
     const processed = yield* Deferred.make<void>();
     yield* worker.enqueue({ source: "diff", event, processed });
-    // Keep this key active until its lifecycle work has finished, so a slow
-    // lifecycle worker cannot accumulate one queued signal per snapshot either.
-    // Other keys can advance without waiting for unrelated lifecycle work.
+    // Hold this key until the lifecycle worker has handled this diff. Snapshots that
+    // arrive meanwhile merge into one pending signal for the turn instead of queueing
+    // a lifecycle item each. Awaiting worker.drain here would stall other diff keys.
     yield* Deferred.await(processed);
   });
   const diffWorker = yield* makeKeyedCoalescingWorker({
@@ -2717,7 +2712,6 @@ const make = Effect.gen(function* () {
       detectProviderDiffRepository(event).pipe(logIngestionFailure("diff", event)),
   });
 
-  /** Subscribes to runtime and domain events, coalescing diff signals per thread and turn. */
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
       yield* forkParked(
