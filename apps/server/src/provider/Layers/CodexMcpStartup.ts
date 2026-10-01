@@ -6,97 +6,85 @@ import * as CodexClient from "effect-codex-app-server/client";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
 const MCP_STARTUP_TIMEOUT = "30 seconds";
-type StartupUpdate = CodexSchema.V2McpServerStatusUpdatedNotification;
+// The reload reply only queues the refresh. Codex then sends `starting` for every
+// restarting server within milliseconds, so wait for the first update, then until
+// no update arrives for BURST_QUIET. Terminal updates can arrive later.
+const FIRST_UPDATE_GRACE = "500 millis";
+const BURST_QUIET = "100 millis";
+type StartupStatus = CodexSchema.V2McpServerStatusUpdatedNotification["status"];
 
-/** Reload acknowledges queued work, not a complete model-facing tool catalog. */
+/**
+ * Returns a per-turn refresh: reload the thread's MCP servers, then wait until none
+ * is still starting. Reload acknowledges queued work, not a complete tool catalog.
+ */
 export const makeCodexMcpStartup = Effect.fnUntraced(function* () {
   const client = yield* CodexClient.CodexAppServerClient;
   const semaphore = yield* Semaphore.make(1);
-  let active:
-    | {
-        threadId: string;
-        statuses: Map<string, StartupUpdate["status"]>;
-        started: Set<string>;
-        changed: Queue.Queue<void>;
-      }
-    | undefined;
+  const changed = yield* Queue.sliding<void>(1);
+  // Latest status per thread and server for the whole session, so the `starting`
+  // sent when a thread opens is not lost before its first turn.
+  const statuses = new Map<string, Map<string, StartupStatus>>();
+  const updateCounts = new Map<string, number>();
+  const statusesFor = (threadId: string) => {
+    let servers = statuses.get(threadId);
+    if (!servers) statuses.set(threadId, (servers = new Map()));
+    return servers;
+  };
 
   yield* client.handleServerNotification("mcpServer/startupStatus/updated", (update) =>
     Effect.gen(function* () {
-      // Unscoped notifications cannot prove readiness for this thread's reload.
-      if (!active || update.threadId !== active.threadId) return;
-      if (update.status === "starting") active.started.add(update.name);
-      else if (update.status !== "ready" && !active.started.has(update.name)) return;
-      active.statuses.set(update.name, update.status);
-      yield* Queue.offer(active.changed, undefined);
+      // Unscoped notifications cannot be attributed to a thread.
+      if (!update.threadId) return;
+      updateCounts.set(update.threadId, (updateCounts.get(update.threadId) ?? 0) + 1);
+      const servers = statusesFor(update.threadId);
+      // Codex can emit cancelled before ready during a reload; a later ready wins.
+      // A failed server restarts on every reload. Wait for it again only after it recovers.
+      const restartOfFailed = update.status === "starting" && servers.get(update.name) === "failed";
+      if (update.status !== "cancelled" && !restartOfFailed)
+        servers.set(update.name, update.status);
+      // Wake the waiter last, so it never reads the map before this update is in it.
+      yield* Queue.offer(changed, undefined);
     }),
   );
 
   return Effect.fnUntraced(function* (threadId: string) {
-    const changed = yield* Queue.sliding<void>(1);
-    const statuses = new Map<string, StartupUpdate["status"]>();
-    const started = new Set<string>();
-    const connected = new Set<string>();
-    active = { threadId, statuses, changed, started };
-    const expected = new Set<string>();
-    const isSettled = (name: string) => {
-      const status = statuses.get(name);
-      // Codex can emit cancelled before ready during a reload. Keep waiting
-      // for ready/failed; a genuinely cancelled server is bounded by the timeout.
-      // Reused connections report ready without starting again. Require the
-      // inventory to agree; neither signal identifies the reload generation.
-      return (
-        (started.has(name) && (status === "ready" || status === "failed")) ||
-        (status === "ready" && connected.has(name))
-      );
-    };
+    const servers = statusesFor(threadId);
+    const updatesBeforeReload = updateCounts.get(threadId) ?? 0;
+    const startingServers = () =>
+      [...servers].filter(([, status]) => status === "starting").map(([name]) => name);
 
     yield* Effect.gen(function* () {
       yield* client.request("config/mcpServer/reload", undefined);
-      let cursor: string | undefined;
-      const cursors = new Set<string>();
-      do {
-        const page = yield* client.request("mcpServerStatus/list", {
-          threadId,
-          detail: "toolsAndAuthOnly",
-          ...(cursor ? { cursor } : {}),
-        });
-        for (const server of page.data) {
-          if (server.runtimeStatus !== "disabled") expected.add(server.name);
-          if (server.runtimeStatus === "connected") connected.add(server.name);
+      yield* Effect.gen(function* () {
+        while ((updateCounts.get(threadId) ?? 0) === updatesBeforeReload) {
+          yield* Queue.take(changed);
         }
-        cursor = page.nextCursor ?? undefined;
-        if (cursor && cursors.has(cursor)) {
-          yield* Effect.logWarning("Codex MCP status pagination repeated a cursor.");
-          return;
-        }
-        if (cursor) cursors.add(cursor);
-      } while (cursor);
-
-      // Only notifications observed during this wait can settle a server. A snapshot may
-      // still describe the old connections while the queued reload is starting.
-      while ([...new Set([...expected, ...statuses.keys()])].some((name) => !isSettled(name))) {
-        yield* Queue.take(changed);
+      }).pipe(Effect.timeoutOption(FIRST_UPDATE_GRACE));
+      // Deciding on the first update alone misses a `starting` later in the same burst.
+      let burstEnded = false;
+      while (!burstEnded) {
+        burstEnded = Option.isNone(
+          yield* Queue.take(changed).pipe(Effect.timeoutOption(BURST_QUIET)),
+        );
       }
+      while (startingServers().length > 0) yield* Queue.take(changed);
     }).pipe(
       Effect.timeoutOption(MCP_STARTUP_TIMEOUT),
-      Effect.flatMap((result) =>
-        Option.isNone(result)
-          ? Effect.logWarning("Timed out waiting for Codex MCP startup; tools may be incomplete.", {
-              threadId,
-              pendingServerCount: [...new Set([...expected, ...statuses.keys()])].filter(
-                (name) => !isSettled(name),
-              ).length,
-            })
-          : Effect.void,
-      ),
+      Effect.flatMap((result) => {
+        if (Option.isSome(result)) return Effect.void;
+        const pending = startingServers();
+        // A server that outlasts the wait counts as failed, so later turns do not wait for it again.
+        for (const name of pending) servers.set(name, "failed");
+        return Effect.logWarning(
+          "Timed out waiting for Codex MCP startup; tools may be incomplete.",
+          {
+            threadId,
+            pendingServerCount: pending.length,
+          },
+        );
+      }),
       Effect.catch((cause) =>
         Effect.logWarning("Failed to refresh Codex MCP tool catalog before turn.", { cause }),
-      ),
-      Effect.ensuring(
-        Effect.sync(() => {
-          active = undefined;
-        }).pipe(Effect.andThen(Queue.shutdown(changed))),
       ),
     );
   }, semaphore.withPermits(1));

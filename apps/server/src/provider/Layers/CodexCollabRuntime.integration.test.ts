@@ -167,9 +167,15 @@ const peerPath = NodePath.join(
 );
 
 describe("CodexSessionRuntime collab integration", () => {
-  it.effect("refreshes and waits for MCP startup before sending each turn", () =>
+  // it.live: the startup wait uses real timers against a real child process.
+  it.live("waits for MCP startup before a turn, but not for reused connections", () =>
     Effect.gen(function* () {
-      const script = { rootThreadId: ROOT, mcpStartup: true, notifications: [] };
+      const script = {
+        rootThreadId: ROOT,
+        mcpStartup: true,
+        mcpReuseAfterFirstTurn: true,
+        notifications: [],
+      };
       NodeFS.writeFileSync(scriptPath, encodeMockScript(script), "utf8");
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
@@ -183,22 +189,22 @@ describe("CodexSessionRuntime collab integration", () => {
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
       yield* runtime.start();
-      for (const input of ["first turn", "second turn"]) {
-        const approvalFiber = yield* runtime.events.pipe(
-          Stream.filter((event) => event.method === "mcpServer/elicitation/request"),
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkScoped,
-        );
-        const sendFiber = yield* runtime.sendTurn({ input }).pipe(Effect.forkScoped);
-        const approvals = yield* Fiber.join(approvalFiber);
-        const requestId = approvals[0]?.requestId;
-        assert.isDefined(requestId);
-        if (requestId === undefined) return;
-        assert.isUndefined(sendFiber.pollUnsafe(), "turn must wait for MCP startup approval");
-        yield* runtime.respondToRequest(requestId, "accept");
-        yield* Fiber.join(sendFiber);
-      }
+      const approvalFiber = yield* runtime.events.pipe(
+        Stream.filter((event) => event.method === "mcpServer/elicitation/request"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      const sendFiber = yield* runtime.sendTurn({ input: "first turn" }).pipe(Effect.forkScoped);
+      const approvals = yield* Fiber.join(approvalFiber);
+      const requestId = approvals[0]?.requestId;
+      assert.isDefined(requestId);
+      if (requestId === undefined) return;
+      assert.isUndefined(sendFiber.pollUnsafe(), "turn must wait for MCP startup approval");
+      yield* runtime.respondToRequest(requestId, "accept");
+      yield* Fiber.join(sendFiber);
+      // The reused servers report ready on reload, so this turn sends without any approval.
+      yield* runtime.sendTurn({ input: "second turn" });
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

@@ -20,6 +20,7 @@ let turnStartCount = 0;
 let activeTurn;
 let mcpReady = false;
 let mcpStartupRequestId;
+let statusListRequested = false;
 // Server->client requests the runtime must answer (approval prompts), keyed
 // by the numeric JSON-RPC id this peer allocated for them.
 const openServerRequests = new Map();
@@ -175,6 +176,18 @@ rl.on("line", (line) => {
   }
   if (script.mcpStartup && method === "config/mcpServer/reload") {
     mcpReady = false;
+    if (script.mcpReuseAfterFirstTurn && turnStartCount > 0) {
+      // Unchanged connections are reused and report ready without starting again.
+      for (const name of ["fast", "slow"]) {
+        write({
+          method: "mcpServer/startupStatus/updated",
+          params: { threadId: script.rootThreadId, name, status: "ready" },
+        });
+      }
+      mcpReady = true;
+      write({ id, result: {} });
+      return;
+    }
     // A completion from the preceding startup must not release the new wait.
     for (const name of ["fast", "slow"]) {
       write({
@@ -189,25 +202,9 @@ rl.on("line", (line) => {
       });
     }
     write({ id, result: {} });
-    return;
-  }
-  if (script.mcpStartup && method === "mcpServerStatus/list") {
     write({
       method: "mcpServer/startupStatus/updated",
       params: { threadId: script.rootThreadId, name: "fast", status: "ready" },
-    });
-    write({
-      id,
-      result: {
-        data: ["fast", "slow"].map((name) => ({
-          name,
-          authStatus: "unsupported",
-          runtimeStatus: "starting",
-          tools: {},
-          resources: [],
-          resourceTemplates: [],
-        })),
-      },
     });
     write({
       method: "mcpServer/startupStatus/updated",
@@ -232,8 +229,14 @@ rl.on("line", (line) => {
     });
     return;
   }
+  if (script.mcpStartup && method === "mcpServerStatus/list") {
+    // Codex answers this by starting a second copy of every server.
+    statusListRequested = true;
+    write({ id, error: { code: -32603, message: "Status list starts duplicate MCP servers" } });
+    return;
+  }
   if (method === "turn/start") {
-    if (script.mcpStartup && !mcpReady) {
+    if (script.mcpStartup && (!mcpReady || statusListRequested)) {
       write({
         id,
         error: { code: -32603, message: "Turn started before MCP startup was observed" },
