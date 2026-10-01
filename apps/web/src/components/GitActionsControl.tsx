@@ -536,7 +536,6 @@ interface PublishRepositoryDialogProps {
   readonly gitCwd: string;
 }
 
-/** Guides repository publication through provider selection, credentials, and repository details. */
 function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const openLink = useOpenLink(props.threadRef);
   const navigate = useNavigate();
@@ -1070,7 +1069,6 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   );
 }
 
-/** Runs Git actions for the active checkout and routes generation failures to its model settings. */
 export default function GitActionsControl({
   presentation = "toolbar",
   gitCwd,

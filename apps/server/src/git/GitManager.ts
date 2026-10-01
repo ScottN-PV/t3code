@@ -115,7 +115,7 @@ interface SourceControlTextGenerationSettings {
   readonly style: SourceControlWritingStyleSettings;
 }
 
-/** Adds the attempted model and picker to a generation failure, preserving its diagnostic and cause. */
+/** Adds the attempted model and the setting that chose it to a generation failure. */
 function withTextGenerationContext(
   error: TextGenerationError,
   settings: SourceControlTextGenerationSettings,
@@ -726,7 +726,6 @@ function shouldPreferSshRemote(url: string | null): boolean {
   return isSshRemoteUrl(url);
 }
 
-/** Copies available fork and head-repository details without introducing undefined fields. */
 function toPullRequestHeadRemoteInfo(pr: {
   isCrossRepository?: boolean | undefined;
   headRepositoryNameWithOwner?: string | null | undefined;
@@ -743,7 +742,6 @@ function toPullRequestHeadRemoteInfo(pr: {
   };
 }
 
-/** Assembles Git status and PR caches plus ordered commit, push, and PR actions over the VCS driver. */
 export const make = Effect.gen(function* () {
   const gitCore = yield* GitVcsDriver.GitVcsDriver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
@@ -1934,7 +1932,6 @@ export const make = Effect.gen(function* () {
       );
   });
 
-  /** Uses a custom commit message or generates commit and optional branch text with the selected writer. */
   const resolveCommitAndBranchSuggestion = Effect.fn("resolveCommitAndBranchSuggestion")(
     function* (input: {
       cwd: string;
@@ -2102,7 +2099,6 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  /** Reuses an existing PR or generates its title and body with the selected writer before creation. */
   const runPrStep = Effect.fn("runPrStep")(function* (
     settings: SourceControlTextGenerationSettings,
     cwd: string,
@@ -2744,7 +2740,6 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  /** Runs branch, commit, push, and PR steps in order, reporting progress and generation model context. */
   const runStackedAction: GitManager["Service"]["runStackedAction"] = Effect.fn("runStackedAction")(
     function* (input, options) {
       const progress = yield* createProgressEmitter(input, options);
@@ -2826,8 +2821,8 @@ export const make = Effect.gen(function* () {
                     );
                     return {
                       modelSelection,
-                      // The resolver returns the chosen settings object unchanged, preserving
-                      // which picker supplied it even when both pickers name the same model.
+                      // The resolver returns the chosen settings object itself, so identity tells
+                      // which setting supplied it even when both name the same model.
                       modelSetting:
                         modelSelection === settings.sourceControlWriterModelSelection
                           ? ("sourceControlWriterModelSelection" as const)
