@@ -333,9 +333,14 @@ it.effect("does not verify a paused credential over the network and resumes afte
   }),
 );
 
-it.effect.each([false, true])(
-  "pins workspace credentials for concurrent summaries, fallback=%s",
-  (fallback) =>
+it.effect.each([
+  ["github.com", false],
+  ["github.com", true],
+  ["github.example", false],
+  ["github.example", true],
+] as const)(
+  "pins workspace credentials for concurrent summaries, host and fallback=%s",
+  ([host, fallback]) =>
     Effect.gen(function* () {
       const commands: VcsProcess.VcsProcessInput[] = [];
       const github = yield* GitHubCli.make.pipe(
@@ -347,7 +352,9 @@ it.effect.each([false, true])(
               const token = input.cwd === "/b" ? "token-b" : "token-a";
               if (input.args[0] === "auth") return output(token);
               if (input.args[1] === "user") return output('{"id":123,"login":"same-viewer"}');
-              if (input.args.includes("rate_limit")) {
+              if (
+                input.args.includes("query=query { rateLimit { cost limit remaining resetAt } }")
+              ) {
                 expect(["token-a", "token-b"]).toContain(input.env?.GH_TOKEN);
                 return output(
                   encodeJson({
@@ -384,6 +391,9 @@ it.effect.each([false, true])(
                   }),
                 );
               const query = input.args.find((arg) => arg.startsWith("query=")) ?? "";
+              expect(query.includes("stack { number size baseRefName }")).toBe(
+                host === "github.com",
+              );
               const data: Record<string, unknown> = {};
               for (const match of query.matchAll(
                 /(s\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\) \{ pullRequest\(number: (\d+)\)/g,
@@ -402,6 +412,7 @@ it.effect.each([false, true])(
                     closedAt: null,
                     reviewDecision: null,
                     mergeable: "MERGEABLE",
+                    ...(host === "github.com" ? { stack: null } : {}),
                   },
                 };
               }
@@ -419,14 +430,26 @@ it.effect.each([false, true])(
           cli.getPullRequestSummary({
             cwd: `/${name}`,
             repository: `${name}/repo`,
-            host: "github.com",
+            host,
             number: index + 1,
           }),
         { concurrency: "unbounded" },
       ).pipe(Effect.forkChild);
       yield* TestClock.adjust("100 millis");
-      expect((yield* Fiber.join(reads)).map((row) => row.number)).toEqual([1, 2, 3, 4]);
-      expect(commands.filter((command) => command.args[1] === "graphql")).toHaveLength(2);
+      const summaries = yield* Fiber.join(reads);
+      expect(summaries.map((row) => row.number)).toEqual([1, 2, 3, 4]);
+      if (!fallback) {
+        expect(summaries.map((row) => row.stack)).toEqual(
+          host === "github.com"
+            ? [null, null, null, null]
+            : [undefined, undefined, undefined, undefined],
+        );
+      }
+      expect(
+        commands.filter((command) =>
+          command.args.some((arg) => arg.startsWith("query=query PullRequestSummaries")),
+        ),
+      ).toHaveLength(2);
       expect(commands.filter((command) => command.args[0] === "auth")).toHaveLength(3);
       expect(commands.filter((command) => command.args[0] === "pr")).toHaveLength(fallback ? 4 : 0);
     }),
