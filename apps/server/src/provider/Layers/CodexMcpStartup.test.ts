@@ -221,6 +221,32 @@ it.effect("ignores other threads' and unscoped updates", () =>
   }),
 );
 
+it.effect("other threads' updates do not extend the quiet period", () =>
+  Effect.gen(function* () {
+    const peer = yield* makePeer();
+    const turn = yield* peer.startRefresh();
+    yield* peer.emit("tools", "ready");
+    for (let update = 0; update < 4; update++) {
+      yield* TestClock.adjust("25 millis");
+      yield* peer.emit("tools", "starting", "child");
+    }
+    yield* Fiber.join(turn);
+  }),
+);
+
+it.effect("observes an own update coalesced with another thread's update", () =>
+  Effect.gen(function* () {
+    const reloading = yield* Deferred.make<void>();
+    const peer = yield* makePeer(Deferred.await(reloading));
+    const turn = yield* peer.startRefresh();
+    yield* peer.emit("tools", "ready");
+    yield* peer.emit("tools", "ready", "child");
+    yield* Deferred.succeed(reloading, undefined);
+    yield* TestClock.adjust("100 millis");
+    yield* Fiber.join(turn);
+  }),
+);
+
 it.effect("serializes overlapping refreshes, each with its own reload", () =>
   Effect.gen(function* () {
     const peer = yield* makePeer();

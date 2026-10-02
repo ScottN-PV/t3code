@@ -168,12 +168,13 @@ const peerPath = NodePath.join(
 
 describe("CodexSessionRuntime collab integration", () => {
   // it.live: the startup wait uses real timers against a real child process.
-  it.live("waits for MCP startup before a turn, but not for reused connections", () =>
+  it.live("waits for MCP startup and reuses connections despite other threads' updates", () =>
     Effect.gen(function* () {
       const script = {
         rootThreadId: ROOT,
         mcpStartup: true,
         mcpReuseAfterFirstTurn: true,
+        mcpChildStartupOnReuse: CHILD_A,
         notifications: [],
       };
       NodeFS.writeFileSync(scriptPath, encodeMockScript(script), "utf8");

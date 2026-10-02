@@ -52,19 +52,23 @@ export const makeCodexMcpStartup = Effect.fnUntraced(function* () {
     const updatesBeforeReload = updateCounts.get(threadId) ?? 0;
     const startingServers = () =>
       [...servers].filter(([, status]) => status === "starting").map(([name]) => name);
+    const waitForUpdate = Effect.fnUntraced(function* (previousCount: number) {
+      while ((updateCounts.get(threadId) ?? 0) === previousCount) {
+        yield* Queue.take(changed);
+      }
+    });
 
     yield* Effect.gen(function* () {
       yield* client.request("config/mcpServer/reload", undefined);
-      yield* Effect.gen(function* () {
-        while ((updateCounts.get(threadId) ?? 0) === updatesBeforeReload) {
-          yield* Queue.take(changed);
-        }
-      }).pipe(Effect.timeoutOption(FIRST_UPDATE_GRACE));
+      yield* waitForUpdate(updatesBeforeReload).pipe(Effect.timeoutOption(FIRST_UPDATE_GRACE));
       // Deciding on the first update alone misses a `starting` later in the same burst.
+      // Foreign updates wake the shared queue without extending this thread's quiet period.
       let burstEnded = false;
       while (!burstEnded) {
         burstEnded = Option.isNone(
-          yield* Queue.take(changed).pipe(Effect.timeoutOption(BURST_QUIET)),
+          yield* waitForUpdate(updateCounts.get(threadId) ?? 0).pipe(
+            Effect.timeoutOption(BURST_QUIET),
+          ),
         );
       }
       while (startingServers().length > 0) yield* Queue.take(changed);

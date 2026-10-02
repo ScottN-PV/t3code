@@ -21,6 +21,8 @@ let activeTurn;
 let mcpReady = false;
 let mcpStartupRequestId;
 let statusListRequested = false;
+let childStartupInterval;
+let childStartupExpired = false;
 // Server->client requests the runtime must answer (approval prompts), keyed
 // by the numeric JSON-RPC id this peer allocated for them.
 const openServerRequests = new Map();
@@ -186,6 +188,24 @@ rl.on("line", (line) => {
       }
       mcpReady = true;
       write({ id, result: {} });
+      if (script.mcpChildStartupOnReuse) {
+        let updates = 0;
+        // Keep foreign startup traffic active until the root turn starts.
+        childStartupInterval = setInterval(() => {
+          write({
+            method: "mcpServer/startupStatus/updated",
+            params: {
+              threadId: script.mcpChildStartupOnReuse,
+              name: "child-tools",
+              status: "ready",
+            },
+          });
+          if (++updates === 250) {
+            clearInterval(childStartupInterval);
+            childStartupExpired = true;
+          }
+        }, 20);
+      }
       return;
     }
     // A completion from the preceding startup must not release the new wait.
@@ -236,6 +256,14 @@ rl.on("line", (line) => {
     return;
   }
   if (method === "turn/start") {
+    clearInterval(childStartupInterval);
+    if (childStartupExpired) {
+      write({
+        id,
+        error: { code: -32603, message: "Other threads' startup updates delayed a ready turn" },
+      });
+      return;
+    }
     if (script.mcpStartup && (!mcpReady || statusListRequested)) {
       write({
         id,
