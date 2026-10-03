@@ -28,7 +28,7 @@ import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { usePaginatedBranches } from "../state/queries";
-import { useProject, useThreadShell } from "../state/entities";
+import { readThreadShell, useProject, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -44,6 +44,7 @@ import { getSourceControlPresentation } from "../sourceControlPresentation";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
   deriveLocalBranchNameFromRemoteRef,
+  isWorktreeChangeBlocked,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
@@ -87,6 +88,8 @@ interface BranchToolbarBranchSelectorProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
 }
+
+const WORKTREE_CHANGE_BLOCKED_MESSAGE = "Stop the current turn to switch worktrees.";
 
 function toBranchActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
@@ -272,6 +275,18 @@ export function BranchToolbarBranchSelector({
   const prReference = parsePullRequestReference(trimmedBranchQuery);
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
+  const isWorktreeChangeBlockedForRef = (refName: VcsRef, runtime = serverSession) =>
+    activeProjectCwd !== null &&
+    !isSelectingWorktreeBase &&
+    isWorktreeChangeBlocked({
+      runtime,
+      currentWorktreePath: activeWorktreePath,
+      nextWorktreePath: resolveBranchSelectionTarget({
+        activeProjectCwd,
+        activeWorktreePath,
+        refName,
+      }).nextWorktreePath,
+    });
   const checkoutPullRequestItemValue =
     prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
   const canCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
@@ -409,6 +424,11 @@ export function BranchToolbarBranchSelector({
       return;
     }
 
+    // Enter selects the highlighted value directly, so disabled rows need this too.
+    // A run can start after the render this handler came from, so read the runtime again.
+    const latestRuntime = readThreadShell(threadRef)?.runtime ?? null;
+    if (isWorktreeChangeBlockedForRef(refName, latestRuntime)) return;
+
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
       activeWorktreePath,
@@ -440,6 +460,25 @@ export function BranchToolbarBranchSelector({
         },
       });
       if (checkoutResult._tag === "Success") {
+        // A run can start while the checkout runs. Leave the thread where it is.
+        const latestThread = readThreadShell(threadRef);
+        if (
+          isWorktreeChangeBlocked({
+            runtime: latestThread?.runtime ?? null,
+            currentWorktreePath: latestThread?.worktreePath ?? activeWorktreePath,
+            nextWorktreePath: selectionTarget.nextWorktreePath,
+          })
+        ) {
+          setOptimisticBranch(previousBranch);
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: WORKTREE_CHANGE_BLOCKED_MESSAGE,
+              description: `Checked out ${refName.name}, but this thread stayed in its current worktree.`,
+            }),
+          );
+          return;
+        }
         const nextBranchName = refName.isRemote
           ? (checkoutResult.value.refName ?? selectedBranchName)
           : selectedBranchName;
@@ -647,6 +686,7 @@ export function BranchToolbarBranchSelector({
         projectCwd={activeProjectCwd}
         index={index}
         value={itemValue}
+        disabled={isWorktreeChangeBlockedForRef(refName)}
         onClick={() => selectPickerItem(itemValue)}
         onContextMenu={(event) => handleBranchContextMenu(event, itemValue)}
       />
@@ -668,6 +708,13 @@ export function BranchToolbarBranchSelector({
       isFetchingNextPage={isFetchingNextPage}
       onLoadNext={branchRefState.loadNext}
       statusText={branchStatusText}
+      notice={
+        refs.some((refName) => isWorktreeChangeBlockedForRef(refName))
+          ? WORKTREE_CHANGE_BLOCKED_MESSAGE
+          : null
+      }
+      // A row's disabled state depends on the run status and the current worktree.
+      extraData={`${serverSession?.status ?? ""}:${serverSession?.activeRunId ?? ""}:${activeWorktreePath ?? ""}`}
       renderItem={renderPickerItem}
       getItemType={(item) =>
         item === checkoutPullRequestItemValue
