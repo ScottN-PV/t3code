@@ -1366,8 +1366,7 @@ export default function GitActionsControl({
         const error = squashAtomCommandFailure(result);
         const errorToastTiming = resolveGitActionResultToastTiming("error");
         const modelSetting = isTextGenerationError(error) ? error.modelSetting : undefined;
-        let errorToastId: GitActionToastId | null = null;
-        errorToastId = toastManager.add(
+        const errorToastId: GitActionToastId = toastManager.add(
           stackedThreadToast({
             type: "error",
             title: "Action failed",
@@ -1385,7 +1384,7 @@ export default function GitActionsControl({
                         projects: readProjects(),
                         groupingSettings: selectProjectGroupingSettings(getClientSettings()),
                       });
-                      if (errorToastId !== null) toastManager.close(errorToastId);
+                      toastManager.close(errorToastId);
                       void navigate({
                         to:
                           modelSetting === "sourceControlWriterModelSelection"
