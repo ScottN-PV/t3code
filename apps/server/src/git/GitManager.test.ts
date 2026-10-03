@@ -914,75 +914,73 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  for (const writer of ["unset", "available", "unavailable", "disabled"] as const) {
-    it.effect(
-      `commit generation failures identify the attempted model with an ${writer} writer`,
-      () =>
-        Effect.gen(function* () {
-          const repoDir = yield* makeTempDir("t3code-git-manager-");
-          yield* initRepo(repoDir);
-          NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "changed\n");
-          const instanceId = ProviderInstanceId.make("test_writer");
-          const writerSelection = { instanceId, model: "writer-model" };
-          const cause = new TextGenerationError({
-            operation: "generateCommitMessage",
-            detail: "Unsupported model",
-          });
-          const { manager } = yield* makeManager({
-            serverSettings: {
-              providerInstances: {
-                [instanceId]: {
-                  driver: ProviderDriverKind.make("codex"),
-                  config: {},
-                  enabled: writer !== "disabled",
-                },
+  it.effect.each(["unset", "available", "unavailable", "disabled"] as const)(
+    "commit generation failures identify the attempted model with an %s writer",
+    (writer) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "changed\n");
+        const instanceId = ProviderInstanceId.make("test_writer");
+        const writerSelection = { instanceId, model: "writer-model" };
+        const cause = new TextGenerationError({
+          operation: "generateCommitMessage",
+          detail: "Unsupported model",
+        });
+        const { manager } = yield* makeManager({
+          serverSettings: {
+            providerInstances: {
+              [instanceId]: {
+                driver: ProviderDriverKind.make("codex"),
+                config: {},
+                enabled: writer !== "disabled",
               },
-              sourceControlWriterModelSelection: writer === "unset" ? null : writerSelection,
             },
-            providers:
-              writer === "available" || writer === "disabled"
-                ? [
-                    decodeServerProvider({
-                      instanceId,
-                      driver: "codex",
-                      enabled: true,
-                      installed: true,
-                      version: null,
-                      status: "ready",
-                      auth: { status: "authenticated" },
-                      checkedAt: "2026-09-26T00:00:00.000Z",
-                      models: [],
-                    }),
-                  ]
-                : [],
-            textGeneration: { generateCommitMessage: () => Effect.fail(cause) },
-          });
-          const error = yield* runStackedAction(manager, { cwd: repoDir, action: "commit" }).pipe(
-            Effect.flip,
-          );
-          const selection =
+            sourceControlWriterModelSelection: writer === "unset" ? null : writerSelection,
+          },
+          providers:
+            writer === "available" || writer === "disabled"
+              ? [
+                  decodeServerProvider({
+                    instanceId,
+                    driver: "codex",
+                    enabled: true,
+                    installed: true,
+                    version: null,
+                    status: "ready",
+                    auth: { status: "authenticated" },
+                    checkedAt: "2026-09-26T00:00:00.000Z",
+                    models: [],
+                  }),
+                ]
+              : [],
+          textGeneration: { generateCommitMessage: () => Effect.fail(cause) },
+        });
+        const error = yield* runStackedAction(manager, { cwd: repoDir, action: "commit" }).pipe(
+          Effect.flip,
+        );
+        const selection =
+          writer === "available"
+            ? writerSelection
+            : DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
+        expect(error).toMatchObject({
+          _tag: "TextGenerationError",
+          operation: "generateCommitMessage",
+          detail: "fake text generation failed",
+          cause,
+          modelSelection: { instanceId: selection.instanceId, model: selection.model },
+          modelSetting:
             writer === "available"
-              ? writerSelection
-              : DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
-          expect(error).toMatchObject({
-            _tag: "TextGenerationError",
-            operation: "generateCommitMessage",
-            detail: "fake text generation failed",
-            cause,
-            modelSelection: { instanceId: selection.instanceId, model: selection.model },
-            modelSetting:
-              writer === "available"
-                ? "sourceControlWriterModelSelection"
-                : "textGenerationModelSelection",
-          });
-          expect(error.message).toContain(selection.model);
-          expect(error.message).toContain(selection.instanceId);
-          expect((yield* runGit(repoDir, ["log", "-1", "--pretty=%s"])).stdout.trim()).toBe(
-            "Initial commit",
-          );
-        }),
-    );
-  }
+              ? "sourceControlWriterModelSelection"
+              : "textGenerationModelSelection",
+        });
+        expect(error.message).toContain(selection.model);
+        expect(error.message).toContain(selection.instanceId);
+        expect((yield* runGit(repoDir, ["log", "-1", "--pretty=%s"])).stdout.trim()).toBe(
+          "Initial commit",
+        );
+      }),
+  );
 
   it.effect("PR generation failures carry model context without creating a PR", () =>
     Effect.gen(function* () {
