@@ -535,6 +535,26 @@ export function BranchToolbarBranchSelector({
         },
       });
       if (createBranchResult._tag === "Success") {
+        // The ref was created in this checkout. If another client moved the thread
+        // and started a run meanwhile, moving it back would stop that run.
+        const latestAfterCreate = readLatestThreadState();
+        if (
+          isWorktreeChangeBlocked({
+            runtime: latestAfterCreate.runtime,
+            currentWorktreePath: latestAfterCreate.worktreePath,
+            nextWorktreePath: activeWorktreePath,
+          })
+        ) {
+          setOptimisticBranch(previousBranch);
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: WORKTREE_CHANGE_BLOCKED_MESSAGE,
+              description: `Created ${createBranchResult.value.refName}, but this thread stayed in its current worktree.`,
+            }),
+          );
+          return;
+        }
         setOptimisticBranch(createBranchResult.value.refName);
         setThreadBranch(createBranchResult.value.refName, activeWorktreePath);
         return;
