@@ -1604,6 +1604,88 @@ describe("ClaudeAdapterV2 attachments", () => {
   );
 });
 
+describe("ClaudeAdapterV2 skill dispatch", () => {
+  // Claude Code moves the expanded command ahead of earlier text blocks, so a
+  // leading block holding only the words before the chip reaches the model as
+  // a cut-off sentence (#13256).
+  it.effect("keeps the full request ahead of a mid-sentence skill command", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const path = yield* Path.Path;
+        const claudeHome = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-v2-skills-home-",
+        });
+        yield* fileSystem.makeDirectory(path.join(claudeHome, "skills", "implement"), {
+          recursive: true,
+        });
+        yield* fileSystem.writeFileString(
+          path.join(claudeHome, "skills", "implement", "SKILL.md"),
+          "---\ndescription: Implement the requested change\n---\nImplement it.\n",
+        );
+        const offeredMessages: Array<SDKUserMessage> = [];
+        const adapter = ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: claudeHome },
+          environment: {},
+          attachmentsDir: yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-v2-skills-attachments-",
+          }),
+          fileSystem,
+          path,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-thread-claude-skills"),
+            open: () =>
+              Effect.succeed({
+                messages: Stream.never,
+                offer: (message) =>
+                  Effect.sync(() => {
+                    offeredMessages.push(message);
+                  }),
+                setModel: () => Effect.void,
+                interrupt: Effect.void,
+                close: Effect.void,
+              }),
+            forkSession: () => Effect.die("unused forkSession"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-skills");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-skills"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-skills"),
+            text: "you will $implement fixes",
+            attachments: [],
+          }),
+        );
+
+        assert.deepEqual(offeredMessages[0]?.message.content, [
+          { type: "text", text: "Ultrathink:\nyou will /implement fixes" },
+          { type: "text", text: "/implement fixes" },
+        ]);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+});
+
 describe("ClaudeAdapterV2 native fork", () => {
   it.effect("forks at the source assistant cursor and resumes the forked session", () =>
     Effect.scoped(
