@@ -145,7 +145,7 @@ const withDescriptorServer = <A, E, R>(run: (origin: string) => Effect.Effect<A,
   );
 
 describe("t3 pair", () => {
-  for (const { baseUrl, publicOrigin, loopback, variant } of [
+  it.effect.each([
     {
       baseUrl: "https://proxy.invalid",
       publicOrigin: "https://proxy.invalid",
@@ -182,8 +182,9 @@ describe("t3 pair", () => {
       loopback: false,
       variant: "userdata",
     },
-  ] as const) {
-    it.effect(`advertises ${baseUrl} while minting against the local ${variant} server`, () =>
+  ] as const)(
+    "advertises $baseUrl while minting against the local $variant server",
+    ({ baseUrl, publicOrigin, loopback, variant }) =>
       withDescriptorServer((origin) =>
         Effect.gen(function* () {
           const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-override-"));
@@ -214,11 +215,11 @@ describe("t3 pair", () => {
           }
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
-    );
-  }
+  );
 
-  for (const baseUrl of ["not-a-url", "/relative", "ftp://proxy.invalid", "file:///tmp/t3"]) {
-    it.effect(`rejects invalid pairing base URL ${baseUrl}`, () =>
+  it.effect.each(["not-a-url", "/relative", "ftp://proxy.invalid", "file:///tmp/t3"])(
+    "rejects invalid pairing base URL %s",
+    (baseUrl) =>
       Effect.gen(function* () {
         const error = yield* provideCliTestLayers(
           runCli(["pair", "--base-url", baseUrl]).pipe(Effect.flip),
@@ -232,8 +233,7 @@ describe("t3 pair", () => {
         assert.notInclude(rendered, "No running T3 Code server");
         assert.notInclude(rendered, "TypeError");
       }),
-    );
-  }
+  );
 
   it.effect("rejects --base-url with --tailscale before discovering or publishing a server", () =>
     Effect.gen(function* () {
