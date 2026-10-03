@@ -915,7 +915,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
   );
 
   it.effect.each(["unset", "available", "unavailable", "disabled"] as const)(
-    "commit generation failures identify the attempted model with an %s writer",
+    "commit generation failures identify the attempted model when the writer is %s",
     (writer) =>
       Effect.gen(function* () {
         const repoDir = yield* makeTempDir("t3code-git-manager-");
