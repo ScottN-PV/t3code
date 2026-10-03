@@ -1372,7 +1372,7 @@ export default function GitActionsControl({
             title: "Action failed",
             description: error instanceof Error ? error.message : "An error occurred.",
             timeout: errorToastTiming.timeout,
-            ...(isTextGenerationError(error) && activeEnvironmentId !== null && gitCwd !== null
+            ...(modelSetting !== undefined && activeEnvironmentId !== null && gitCwd !== null
               ? {
                   actionProps: {
                     children: "Settings",
