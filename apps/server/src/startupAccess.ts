@@ -1,3 +1,4 @@
+import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
 import { QrCode } from "@t3tools/shared/qrCode";
@@ -30,7 +31,8 @@ export const isLoopbackHost = (host: string | undefined): boolean => {
     }
   }
 
-  return host === "localhost" || host.startsWith("127.");
+  // A hostname such as 127.proxy.example is a name, not the loopback range.
+  return host === "localhost" || (NodeNet.isIPv4(host) && host.startsWith("127."));
 };
 
 export const isWildcardHost = (host: string | undefined): boolean =>

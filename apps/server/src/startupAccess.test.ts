@@ -11,6 +11,9 @@ import {
 } from "./startupAccess.ts";
 
 it.each([
+  "localhost",
+  "127.0.0.1",
+  "127.255.255.254",
   "::ffff:127.0.0.1",
   "[::ffff:127.0.0.1]",
   "[::ffff:7f00:1]",
@@ -28,6 +31,8 @@ it.each([
   "::ffff:192.168.1.42",
   "::",
   "invalid:host",
+  "127.proxy.example",
+  "127.0.0.1.example.com",
 ])("does not classify %s as loopback", (host) => {
   expect(isLoopbackHost(host)).toBe(false);
 });

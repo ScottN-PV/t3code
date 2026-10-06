@@ -154,6 +154,12 @@ describe("t3 pair", () => {
       variant: "userdata",
     },
     {
+      baseUrl: "https://127.proxy.invalid",
+      publicOrigin: "https://127.proxy.invalid",
+      loopback: false,
+      variant: "userdata",
+    },
+    {
       baseUrl: "http://proxy.invalid:8080",
       publicOrigin: "http://proxy.invalid:8080",
       loopback: false,
