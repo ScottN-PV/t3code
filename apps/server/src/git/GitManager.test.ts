@@ -982,6 +982,40 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       }),
   );
 
+  it.effect("generation failures bound a long configured model name", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "changed\n");
+      const model = `long-${"m".repeat(300)}`;
+      const { manager } = yield* makeManager({
+        serverSettings: {
+          textGenerationModelSelection: {
+            ...DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
+            model,
+          },
+        },
+        textGeneration: {
+          generateCommitMessage: () =>
+            Effect.fail(
+              new TextGenerationError({
+                operation: "generateCommitMessage",
+                detail: "Unsupported model",
+              }),
+            ),
+        },
+      });
+      const error = yield* runStackedAction(manager, { cwd: repoDir, action: "commit" }).pipe(
+        Effect.flip,
+      );
+
+      expect(error).toMatchObject({
+        _tag: "TextGenerationError",
+        modelSelection: { model: model.slice(0, 128) },
+      });
+    }),
+  );
+
   it.effect("PR generation failures carry model context without creating a PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
