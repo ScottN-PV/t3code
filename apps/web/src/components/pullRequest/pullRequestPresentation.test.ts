@@ -145,16 +145,22 @@ describe("resolvePullRequestConflict", () => {
 describe("detailSummaryChecksState", () => {
   const passed = { name: "CI", status: "success", description: null, url: null } as const;
 
-  it("passes the list's rollup on when the detail could not read checks", () => {
-    expect(detailSummaryChecksState({ checks: [], checksUnreadable: true }, "failing")).toBe(
-      "failing",
-    );
-    // Without a list rollup it clears, rather than keeping an older rollup as current.
-    expect(detailSummaryChecksState({ checks: [], checksUnreadable: true }, undefined)).toBe(null);
+  it("passes on the head commit's rollup when the detail could not read checks", () => {
+    expect(
+      detailSummaryChecksState({
+        checks: [],
+        checksUnreadable: true,
+        checksRollupState: "failing",
+      }),
+    ).toBe("failing");
+    // Without one it clears, rather than keeping an older rollup as current.
+    expect(detailSummaryChecksState({ checks: [], checksUnreadable: true })).toBe(null);
   });
 
   it("works the rollup out from checks the detail could read", () => {
-    expect(detailSummaryChecksState({ checks: [passed] }, "failing")).toBe("passing");
-    expect(detailSummaryChecksState({ checks: [] }, "passing")).toBe(null);
+    expect(detailSummaryChecksState({ checks: [passed], checksRollupState: "failing" })).toBe(
+      "passing",
+    );
+    expect(detailSummaryChecksState({ checks: [] })).toBe(null);
   });
 });

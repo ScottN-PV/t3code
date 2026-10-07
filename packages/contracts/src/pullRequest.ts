@@ -899,6 +899,8 @@ export const PullRequestDetail = Schema.Struct({
    * access token. An empty `checks` then says nothing about whether any ran.
    */
   checksUnreadable: Schema.optional(Schema.Boolean),
+  /** The host's overall check state for the head commit, sent with `checksUnreadable` when known. */
+  checksRollupState: Schema.optional(PullRequestChecksState),
   mergeCapabilities: PullRequestMergeCapabilities,
   /**
    * Who the host says the reader is, which is the one thing a conversation cannot be read without

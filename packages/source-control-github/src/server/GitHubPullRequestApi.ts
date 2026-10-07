@@ -1573,10 +1573,17 @@ export const make = Effect.gen(function* () {
                 })),
               ),
           ),
-          // GitHub refuses check runs to a fine-grained token, on the first page or a later one;
-          // the rest of the detail still reads.
+          // GitHub refuses check runs to a fine-grained token, on the first page or a later one.
+          // The head commit's overall state usually still reads, and the rest of the detail
+          // always does.
           Effect.catchIf(isRefusedForPermission, () =>
-            readCore(allowReserve, pullRequestCoreGraphQlQuery(input.host, { checks: false })).pipe(
+            readCore(
+              allowReserve,
+              pullRequestCoreGraphQlQuery(input.host, { checks: "rollup" }),
+            ).pipe(
+              Effect.catchIf(isRefusedForPermission, () =>
+                readCore(allowReserve, pullRequestCoreGraphQlQuery(input.host, { checks: false })),
+              ),
               Effect.map((core): GitHubPullRequestCore => ({ ...core, checksUnreadable: true })),
             ),
           ),

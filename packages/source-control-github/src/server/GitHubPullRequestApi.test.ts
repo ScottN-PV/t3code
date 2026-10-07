@@ -3755,29 +3755,40 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
-  it.effect("reads the detail without checks when GitHub refuses them to the token", () =>
-    Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.fail(checksRefused))
-        .mockReturnValueOnce(
-          Effect.succeed(output(encodeJson(coreResponse({ commits: undefined, body: "Body" })))),
+  it.effect(
+    "reads the detail with only the head's check state when GitHub refuses the checks",
+    () =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValueOnce(Effect.fail(checksRefused)).mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              encodeJson(
+                coreResponse({
+                  body: "Body",
+                  commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] },
+                }),
+              ),
+            ),
+          ),
         );
-      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
-      const detail = yield* cli.getPullRequestDetail({
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        number: 7,
-      });
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const detail = yield* cli.getPullRequestDetail({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+        });
 
-      expect(queryAt(0)).toContain("statusCheckRollup");
-      expect(queryAt(1)).not.toContain("statusCheckRollup");
-      assert.strictEqual(mockedExecute.mock.calls.length, 2);
-      expect(detail.body).toBe("Body");
-      expect(detail.checks).toEqual([]);
-      expect(detail.checksUnreadable).toBe(true);
-      expect(detail.comparison).toEqual({ behindBy: 2, viewerCanUpdate: true });
-    }),
+        expect(queryAt(0)).toContain("contexts(first: 100)");
+        expect(queryAt(1)).toContain("statusCheckRollup { state }");
+        expect(queryAt(1)).not.toContain("contexts");
+        assert.strictEqual(mockedExecute.mock.calls.length, 2);
+        expect(detail.body).toBe("Body");
+        expect(detail.checks).toEqual([]);
+        expect(detail.checksState).toBe("failing");
+        expect(detail.checksUnreadable).toBe(true);
+        expect(detail.comparison).toEqual({ behindBy: 2, viewerCanUpdate: true });
+      }),
   );
 
   it.effect("reads the detail without checks when GitHub refuses a later page of them", () =>
@@ -3820,8 +3831,32 @@ layer("GitHubPullRequestApi.layer", (it) => {
       });
 
       assert.strictEqual(mockedExecute.mock.calls.length, 3);
-      expect(queryAt(2)).not.toContain("statusCheckRollup");
+      expect(queryAt(2)).toContain("statusCheckRollup { state }");
       expect(detail.checks).toEqual([]);
+      expect(detail.checksState).toBeNull();
+      expect(detail.checksUnreadable).toBe(true);
+    }),
+  );
+
+  it.effect("reads the detail without any checks when GitHub refuses the check state too", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.fail(checksRefused))
+        .mockReturnValueOnce(Effect.fail(checksRefused))
+        .mockReturnValueOnce(
+          Effect.succeed(output(encodeJson(coreResponse({ commits: undefined })))),
+        );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const detail = yield* cli.getPullRequestDetail({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+      expect(queryAt(2)).not.toContain("statusCheckRollup");
+      expect(detail.checksState).toBeNull();
       expect(detail.checksUnreadable).toBe(true);
     }),
   );
@@ -3829,6 +3864,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
   it.effect("returns the refusal when the detail without checks is refused too", () =>
     Effect.gen(function* () {
       mockedExecute
+        .mockReturnValueOnce(Effect.fail(checksRefused))
         .mockReturnValueOnce(Effect.fail(checksRefused))
         .mockReturnValueOnce(Effect.fail(checksRefused));
       const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
@@ -3842,7 +3878,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
       );
 
       expect(error._tag).toBe("GitHubApiResponseError");
-      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
     }),
   );
 

@@ -730,27 +730,31 @@ const RawCoreSchema = Schema.Struct({
                 commit: Schema.Struct({
                   statusCheckRollup: Schema.NullOr(
                     Schema.Struct({
-                      contexts: Schema.Struct({
-                        nodes: Schema.Array(
-                          Schema.Struct({
-                            ...RawCheckSchema.fields,
-                            checkSuite: Schema.optional(
-                              Schema.NullOr(
-                                Schema.Struct({
-                                  workflowRun: Schema.NullOr(
-                                    Schema.Struct({
-                                      workflow: Schema.NullOr(
-                                        Schema.Struct({ name: Schema.String }),
-                                      ),
-                                    }),
-                                  ),
-                                }),
+                      // The read with only the overall state has no contexts.
+                      state: Schema.optional(Schema.String),
+                      contexts: Schema.optional(
+                        Schema.Struct({
+                          nodes: Schema.Array(
+                            Schema.Struct({
+                              ...RawCheckSchema.fields,
+                              checkSuite: Schema.optional(
+                                Schema.NullOr(
+                                  Schema.Struct({
+                                    workflowRun: Schema.NullOr(
+                                      Schema.Struct({
+                                        workflow: Schema.NullOr(
+                                          Schema.Struct({ name: Schema.String }),
+                                        ),
+                                      }),
+                                    ),
+                                  }),
+                                ),
                               ),
-                            ),
-                          }),
-                        ),
-                        pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
-                      }),
+                            }),
+                          ),
+                          pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+                        }),
+                      ),
                     }),
                   ),
                 }),
@@ -827,15 +831,22 @@ function checkContextNodesSelection(host: string): string {
 }
 
 /**
- * The detail read. `checks: false` leaves out the head commit's checks, for a token GitHub will
- * not show check runs to: a fine-grained personal access token cannot be given the Checks
- * permission, and one refused field fails the whole read.
+ * The detail read. A fine-grained personal access token cannot be given the Checks permission,
+ * and one refused field fails the whole read, so `checks: "rollup"` asks only for the head
+ * commit's overall check state, which Commit statuses: Read allows, and `checks: false` leaves
+ * checks out entirely.
  */
-export const pullRequestCoreGraphQlQuery = (host: string, options?: { readonly checks: false }) => {
+export const pullRequestCoreGraphQlQuery = (
+  host: string,
+  options?: { readonly checks: "rollup" | false },
+) => {
   const checks =
     options?.checks === false
       ? ""
-      : `
+      : options?.checks === "rollup"
+        ? `
+      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`
+        : `
       commits(last: 1) {
         nodes { commit { statusCheckRollup { contexts(first: 100) {
           ${checkContextNodesSelection(host)}
@@ -2330,7 +2341,9 @@ export function decodePullRequestCoreJson(
   if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
   const repository = decoded.success.data.repository;
   const pr = repository.pullRequest;
-  const contexts = pr.commits?.nodes[0]?.commit.statusCheckRollup?.contexts;
+  const rollup = pr.commits?.nodes[0]?.commit.statusCheckRollup;
+  const contexts = rollup?.contexts;
+  const rollupState = trimmed(rollup?.state);
   return Result.succeed({
     ...toDetail({
       ...pr,
@@ -2338,7 +2351,12 @@ export function decodePullRequestCoreJson(
         requestedReviewer === null ? [] : [requestedReviewer],
       ),
       labels: pr.labels.nodes,
-      statusCheckRollup: toCheckContexts(contexts?.nodes ?? []),
+      // Without contexts, the overall state is dressed as a single nameless check, as a search
+      // row's is, so it sets the check state without adding a check.
+      statusCheckRollup:
+        contexts === undefined && rollupState !== null
+          ? [{ state: rollupState }]
+          : toCheckContexts(contexts?.nodes ?? []),
     }),
     viewerAccess: {
       canWrite: toCanWrite(repository.viewerPermission),

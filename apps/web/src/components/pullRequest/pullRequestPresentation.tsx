@@ -304,18 +304,16 @@ export function pullRequestChecksState(
 
 /**
  * The rollup a detail publishes to the shared summary. A detail that could not read its checks
- * passes on the list's rollup, which GitHub can still return. Without one it publishes null, so
+ * passes on the host's overall state for its own head commit. Without one it publishes null, so
  * an older rollup kept in the shared summary is not shown as current.
  */
-export function detailSummaryChecksState(
-  detail: {
-    readonly checks: ReadonlyArray<PullRequestCheck>;
-    readonly checksUnreadable?: boolean | undefined;
-  },
-  listChecksState: PullRequestChecksState | null | undefined,
-): PullRequestChecksState | null {
+export function detailSummaryChecksState(detail: {
+  readonly checks: ReadonlyArray<PullRequestCheck>;
+  readonly checksUnreadable?: boolean | undefined;
+  readonly checksRollupState?: PullRequestChecksState | undefined;
+}): PullRequestChecksState | null {
   return detail.checksUnreadable === true
-    ? (listChecksState ?? null)
+    ? (detail.checksRollupState ?? null)
     : pullRequestChecksState(detail.checks);
 }
 

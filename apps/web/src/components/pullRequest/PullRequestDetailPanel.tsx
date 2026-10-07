@@ -614,9 +614,9 @@ export function PullRequestDetailPanel({
     if (detailQuery.data === null) return null;
     return {
       ...detailQuery.data,
-      checksState: detailSummaryChecksState(detailQuery.data, listSummary?.checksState),
+      checksState: detailSummaryChecksState(detailQuery.data),
     };
-  }, [detailQuery.data, listSummary]);
+  }, [detailQuery.data]);
   const observedSummary = useSharedPullRequestSummary(
     environmentId,
     reference,
