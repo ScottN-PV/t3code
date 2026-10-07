@@ -1034,13 +1034,15 @@ const reportPage = (
     readonly width: number;
     readonly height: number;
     readonly zoom?: number;
+    /** How far the page is scrolled down, in CSS pixels. */
+    readonly scrollY?: number;
   },
 ) => {
-  const { zoom = 1, ...reported } = page;
+  const { zoom = 1, scrollY = 0, ...reported } = page;
   const replies: Record<string, Record<string, unknown>> = {
     "Page.getFrameTree": { frameTree: { frame: { id: "main" } } },
     "Page.createIsolatedWorld": { executionContextId: 7 },
-    "Page.getLayoutMetrics": { cssVisualViewport: { pageX: 0, pageY: 0, zoom } },
+    "Page.getLayoutMetrics": { cssVisualViewport: { pageX: 0, pageY: scrollY, zoom } },
   };
   for (const session of context.sessions) {
     const send = session.send.getMockImplementation()!;
@@ -1163,6 +1165,33 @@ it.live("sizes a desktop-drawn snapshot by the zoom the page has, not one still 
       });
       expect(captureClips(context)).toEqual([{ width: 1280, height: 800, scale: 1280 / 1920 }]);
       expect(snapshot.screenshot).toMatchObject({ width: 1280, height: 800 });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("starts a zoomed desktop-drawn page's clip where it is scrolled to", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      desktopRendersNext = true;
+      const { browser, broker, tabId } = yield* ready;
+      yield* browser.attachViewer(viewerInput(tabId, false));
+      const context = desktopConnections[0]!.context;
+      // Scrolled 100 CSS pixels at 200% zoom is 200 device-independent pixels down.
+      reportPage(context, { ratio: 3, width: 640, height: 400, zoom: 2, scrollY: 100 });
+      yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      const origins = context.sessions.flatMap((session) =>
+        session.send.mock.calls.flatMap(([method, input]) => {
+          const clip = (input as { readonly clip?: { readonly x: number; readonly y: number } })
+            ?.clip;
+          return method === "Page.captureScreenshot" && clip ? [{ x: clip.x, y: clip.y }] : [];
+        }),
+      );
+      expect(origins).toEqual([{ x: 0, y: 200 }]);
     }),
   ).pipe(Effect.provide(layer)),
 );

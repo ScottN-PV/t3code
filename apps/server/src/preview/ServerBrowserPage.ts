@@ -207,9 +207,11 @@ export const captureViewport = async (
   if (options.scale < 1) {
     const viewport = options.viewport ?? page.viewportSize() ?? { width: 1280, height: 800 };
     const { cssVisualViewport } = await cdp.send("Page.getLayoutMetrics");
+    // The offsets are CSS pixels; a clip is in device-independent pixels, which page zoom scales.
+    const zoom = cssVisualViewport.zoom ?? 1;
     clip = {
-      x: cssVisualViewport.pageX,
-      y: cssVisualViewport.pageY,
+      x: cssVisualViewport.pageX * zoom,
+      y: cssVisualViewport.pageY * zoom,
       ...viewport,
       scale: options.scale,
     };
