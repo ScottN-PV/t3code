@@ -722,37 +722,42 @@ const RawCoreSchema = Schema.Struct({
           ),
         }),
         labels: Schema.Struct({ nodes: Schema.Array(RawLabelSchema) }),
-        commits: Schema.Struct({
-          nodes: Schema.Array(
-            Schema.Struct({
-              commit: Schema.Struct({
-                statusCheckRollup: Schema.NullOr(
-                  Schema.Struct({
-                    contexts: Schema.Struct({
-                      nodes: Schema.Array(
-                        Schema.Struct({
-                          ...RawCheckSchema.fields,
-                          checkSuite: Schema.optional(
-                            Schema.NullOr(
-                              Schema.Struct({
-                                workflowRun: Schema.NullOr(
-                                  Schema.Struct({
-                                    workflow: Schema.NullOr(Schema.Struct({ name: Schema.String })),
-                                  }),
-                                ),
-                              }),
+        // Absent from the read without checks.
+        commits: Schema.optional(
+          Schema.Struct({
+            nodes: Schema.Array(
+              Schema.Struct({
+                commit: Schema.Struct({
+                  statusCheckRollup: Schema.NullOr(
+                    Schema.Struct({
+                      contexts: Schema.Struct({
+                        nodes: Schema.Array(
+                          Schema.Struct({
+                            ...RawCheckSchema.fields,
+                            checkSuite: Schema.optional(
+                              Schema.NullOr(
+                                Schema.Struct({
+                                  workflowRun: Schema.NullOr(
+                                    Schema.Struct({
+                                      workflow: Schema.NullOr(
+                                        Schema.Struct({ name: Schema.String }),
+                                      ),
+                                    }),
+                                  ),
+                                }),
+                              ),
                             ),
-                          ),
-                        }),
-                      ),
-                      pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+                          }),
+                        ),
+                        pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+                      }),
                     }),
-                  }),
-                ),
+                  ),
+                }),
               }),
-            }),
-          ),
-        }),
+            ),
+          }),
+        ),
       }),
     }),
   }),
@@ -821,7 +826,22 @@ function checkContextNodesSelection(host: string): string {
           }`;
 }
 
-export const pullRequestCoreGraphQlQuery = (host: string) => {
+/**
+ * The detail read. `checks: false` leaves out the head commit's checks, for a token GitHub will
+ * not show check runs to: a fine-grained personal access token cannot be given the Checks
+ * permission, and one refused field fails the whole read.
+ */
+export const pullRequestCoreGraphQlQuery = (host: string, options?: { readonly checks: false }) => {
+  const checks =
+    options?.checks === false
+      ? ""
+      : `
+      commits(last: 1) {
+        nodes { commit { statusCheckRollup { contexts(first: 100) {
+          ${checkContextNodesSelection(host)}
+          pageInfo { hasNextPage }
+        } } } }
+      }`;
   return `query($owner: String!, $name: String!, $number: Int!, $headRef: String!) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerPermission
@@ -837,13 +857,7 @@ export const pullRequestCoreGraphQlQuery = (host: string) => {
       reviewRequests(first: 100) {
         nodes { requestedReviewer { ... on User { login name } ... on Bot { login } ... on Team { slug name } } }
       }
-      labels(first: 100) { nodes { name color } }
-      commits(last: 1) {
-        nodes { commit { statusCheckRollup { contexts(first: 100) {
-          ${checkContextNodesSelection(host)}
-          pageInfo { hasNextPage }
-        } } } }
-      }
+      labels(first: 100) { nodes { name color } }${checks}
     }
   }
 }`;
@@ -1346,6 +1360,8 @@ export interface GitHubPullRequestDetail extends GitHubPullRequestListItem {
   readonly mergedAt: string | null;
   readonly closedAt: string | null;
   readonly checks: ReadonlyArray<PullRequestCheck>;
+  /** GitHub would not show this token the checks, so an empty `checks` says nothing. */
+  readonly checksUnreadable?: true;
   /** Absent where `gh` did not answer for auto-merge at all, which is not the same as off. */
   readonly autoMergeEnabled?: boolean;
   /** Absent where auto-merge is off or GitHub did not report the stored strategy. */
@@ -2314,7 +2330,7 @@ export function decodePullRequestCoreJson(
   if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
   const repository = decoded.success.data.repository;
   const pr = repository.pullRequest;
-  const contexts = pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts;
+  const contexts = pr.commits?.nodes[0]?.commit.statusCheckRollup?.contexts;
   return Result.succeed({
     ...toDetail({
       ...pr,

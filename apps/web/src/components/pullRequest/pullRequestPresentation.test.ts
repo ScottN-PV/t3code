@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolvePullRequestConflict, resolvePullRequestState } from "./pullRequestPresentation";
+import {
+  detailSummaryChecksState,
+  resolvePullRequestConflict,
+  resolvePullRequestState,
+} from "./pullRequestPresentation";
 import { PullRequestGlyph } from "./pullRequestIcons";
 
 describe("resolvePullRequestState", () => {
@@ -135,5 +139,22 @@ describe("resolvePullRequestConflict", () => {
       label: "Has conflicts",
       toneClassName: "text-destructive",
     });
+  });
+});
+
+describe("detailSummaryChecksState", () => {
+  const passed = { name: "CI", status: "success", description: null, url: null } as const;
+
+  it("passes the list's rollup on when the detail could not read checks", () => {
+    expect(detailSummaryChecksState({ checks: [], checksUnreadable: true }, "failing")).toBe(
+      "failing",
+    );
+    // Without a list rollup it clears, rather than keeping an older rollup as current.
+    expect(detailSummaryChecksState({ checks: [], checksUnreadable: true }, undefined)).toBe(null);
+  });
+
+  it("works the rollup out from checks the detail could read", () => {
+    expect(detailSummaryChecksState({ checks: [passed] }, "failing")).toBe("passing");
+    expect(detailSummaryChecksState({ checks: [] }, "passing")).toBe(null);
   });
 });

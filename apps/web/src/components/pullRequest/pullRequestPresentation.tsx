@@ -303,6 +303,23 @@ export function pullRequestChecksState(
 }
 
 /**
+ * The rollup a detail publishes to the shared summary. A detail that could not read its checks
+ * passes on the list's rollup, which GitHub can still return. Without one it publishes null, so
+ * an older rollup kept in the shared summary is not shown as current.
+ */
+export function detailSummaryChecksState(
+  detail: {
+    readonly checks: ReadonlyArray<PullRequestCheck>;
+    readonly checksUnreadable?: boolean | undefined;
+  },
+  listChecksState: PullRequestChecksState | null | undefined,
+): PullRequestChecksState | null {
+  return detail.checksUnreadable === true
+    ? (listChecksState ?? null)
+    : pullRequestChecksState(detail.checks);
+}
+
+/**
  * How a verdict reads, in the one place every surface takes it from. The green is the green a
  * passing check already wears in the same panel, so "approved" and "all checks passed" cannot
  * look like two different kinds of good news.
@@ -568,6 +585,10 @@ export function PullRequestMetaLine({
     </span>
   );
 }
+
+/** Shown in place of "No checks reported" when the host would not show this reader the checks. */
+export const UNREADABLE_CHECKS_EXPLANATION =
+  "GitHub does not show checks to the signed-in token. A fine-grained personal access token cannot read check runs.";
 
 export function summarizePullRequestChecks(checks: ReadonlyArray<PullRequestCheck>): string {
   if (checks.length === 0) return "No checks reported";

@@ -168,6 +168,8 @@ import {
   PullRequestMetaLine,
   PullRequestReviewOutcomeIcon,
   pullRequestChecksState,
+  detailSummaryChecksState,
+  UNREADABLE_CHECKS_EXPLANATION,
   pullRequestChecksStatePresentation,
   pullRequestReviewOutcomeToneClassName,
   resolvePullRequestState,
@@ -608,16 +610,13 @@ export function PullRequestDetailPanel({
     () => (matchingListEntry === null ? null : pullRequestListEntryToSummary(matchingListEntry)),
     [matchingListEntry],
   );
-  const detailSummary = useMemo(
-    () =>
-      detailQuery.data === null
-        ? null
-        : {
-            ...detailQuery.data,
-            checksState: pullRequestChecksState(detailQuery.data.checks),
-          },
-    [detailQuery.data],
-  );
+  const detailSummary = useMemo(() => {
+    if (detailQuery.data === null) return null;
+    return {
+      ...detailQuery.data,
+      checksState: detailSummaryChecksState(detailQuery.data, listSummary?.checksState),
+    };
+  }, [detailQuery.data, listSummary]);
   const observedSummary = useSharedPullRequestSummary(
     environmentId,
     reference,
@@ -1448,8 +1447,9 @@ export function PullRequestDetailPanel({
     detail?.checks.some((check) => check.status === "action-required")
       ? "pending"
       : latestChecksState;
-  // A newer rollup cannot tell us which runs changed or how many passed.
-  const checksStale = checksState !== detailChecksState;
+  // A newer rollup cannot tell us which runs changed or how many passed. Checks the host will not
+  // show this reader are not out of date: reading them again returns none.
+  const checksStale = detail?.checksUnreadable !== true && checksState !== detailChecksState;
   // The merge state remains in one stable slot from waiting through completion. Conflicts take
   // the slot while they need a person; the armed badge remains beside them so that state is not lost.
   const primaryAction = detail
@@ -1507,7 +1507,11 @@ export function PullRequestDetailPanel({
       ? "No checks reported"
       : pullRequestChecksStatePresentation(checksState).label
     : detail
-      ? summarizePullRequestChecks(detail.checks)
+      ? detail.checksUnreadable === true
+        ? checksState === null
+          ? "Checks unavailable"
+          : pullRequestChecksStatePresentation(checksState).label
+        : summarizePullRequestChecks(detail.checks)
       : null;
   // Approvals that still stand, and only those. A superseded one is dimmed beside the reviewer
   // who gave it, so counting it here would have the header assert in a number what the row next
@@ -2641,10 +2645,26 @@ export function PullRequestDetailPanel({
                     checksState !== null ? (
                       <PullRequestChecksPopover
                         checks={detail.checks}
+                        checksUnreadable={detail.checksUnreadable === true}
                         stale={checksStale}
                         checksState={checksState}
                         threadRef={threadRef}
                       />
+                    ) : detail.checksUnreadable === true ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span
+                              tabIndex={0}
+                              aria-label={UNREADABLE_CHECKS_EXPLANATION}
+                              className="inline-flex"
+                            >
+                              <CircleDotIcon aria-hidden className="size-3.5" />
+                            </span>
+                          }
+                        />
+                        <TooltipPopup side="top">{UNREADABLE_CHECKS_EXPLANATION}</TooltipPopup>
+                      </Tooltip>
                     ) : (
                       <CircleDotIcon aria-hidden className="size-3.5" />
                     )

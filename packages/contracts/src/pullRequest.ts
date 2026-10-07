@@ -894,6 +894,11 @@ export const PullRequestDetail = Schema.Struct({
   reviewers: Schema.Array(PullRequestActor),
   labels: Schema.Array(PullRequestLabel),
   checks: Schema.Array(PullRequestCheck),
+  /**
+   * The host would not show this reader the checks, as GitHub does for a fine-grained personal
+   * access token. An empty `checks` then says nothing about whether any ran.
+   */
+  checksUnreadable: Schema.optional(Schema.Boolean),
   mergeCapabilities: PullRequestMergeCapabilities,
   /**
    * Who the host says the reader is, which is the one thing a conversation cannot be read without
