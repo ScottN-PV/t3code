@@ -631,10 +631,13 @@ const make = Effect.gen(function* () {
       await tab.page.emulateMedia({ colorScheme: colorScheme === "system" ? null : colorScheme });
     }
     const zoomFactor = snapshot.zoomFactor ?? 1;
-    if (zoomFactor !== tab.zoomFactor && !tab.desktop) {
+    if (zoomFactor !== tab.zoomFactor) {
       tab.zoomFactor = zoomFactor;
-      await applyZoom(tab);
-      broadcastViewport(tab);
+      // The desktop applies the zoom to a page it draws; it is kept here for snapshot sizing.
+      if (!tab.desktop) {
+        await applyZoom(tab);
+        broadcastViewport(tab);
+      }
     }
   };
 
@@ -1270,6 +1273,26 @@ const make = Effect.gen(function* () {
     return started;
   };
 
+  /**
+   * What sizes a snapshot. Chromium sizes a capture in device-independent pixels times the
+   * display's scale, without page zoom. A headless tab renders at RENDER_SCALE in the viewport
+   * Playwright set. A tab the desktop draws has neither: its page reports the display's scale
+   * times the zoom the desktop applied, and its viewport in CSS pixels.
+   */
+  const snapshotRendering = async (tab: ServerTab) => {
+    if (!tab.desktop) return { renderScale: RENDER_SCALE };
+    const page = (await tab.page.evaluate(
+      "({ ratio: devicePixelRatio, width: innerWidth, height: innerHeight })",
+    )) as { readonly ratio: number; readonly width: number; readonly height: number };
+    return {
+      renderScale: page.ratio / tab.zoomFactor,
+      viewport: {
+        width: Math.round(page.width * tab.zoomFactor),
+        height: Math.round(page.height * tab.zoomFactor),
+      },
+    };
+  };
+
   // Scaled captures repaint every screencast; pause them to avoid leaking that frame.
   const withScreencastsPaused = <A>(tab: ServerTab, capture: () => Promise<A>): Promise<A> =>
     withCaptureLock(tab, async () => {
@@ -1653,8 +1676,8 @@ const make = Effect.gen(function* () {
         return { tabId: tab.tabId, colorScheme };
       }
       case "snapshot": {
-        return withScreencastsPaused(tab, () =>
-          ServerBrowserPage.snapshot({ ...tab, renderScale: RENDER_SCALE }),
+        return withScreencastsPaused(tab, async () =>
+          ServerBrowserPage.snapshot({ ...tab, ...(await snapshotRendering(tab)) }),
         );
       }
       case "click": {

@@ -150,15 +150,34 @@ const SNAPSHOT_SCRIPT = `(() => {
   };
 })()`;
 
+/**
+ * Width and height from a PNG's header, so the reported size is the image's own. Null for data
+ * that is not a PNG.
+ */
+const pngSize = (base64: string) => {
+  const header = Buffer.from(base64.slice(0, 32), "base64");
+  return header.length >= 24 && header.toString("latin1", 12, 16) === "IHDR"
+    ? { width: header.readUInt32BE(16), height: header.readUInt32BE(20) }
+    : null;
+};
+
+/** A page's viewport in device-independent pixels, the units a capture clip is given in. */
+type Viewport = { readonly width: number; readonly height: number };
+
 // Scaled captures repaint live screencasts, so callers pause them. Clips use document offsets.
 export const captureViewport = async (
   page: Page,
   cdp: CDPSession,
-  options: { readonly format: "png" | "jpeg"; readonly quality?: number; readonly scale: number },
+  options: {
+    readonly format: "png" | "jpeg";
+    readonly quality?: number;
+    readonly scale: number;
+    readonly viewport?: Viewport;
+  },
 ) => {
   let clip;
   if (options.scale < 1) {
-    const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
+    const viewport = options.viewport ?? page.viewportSize() ?? { width: 1280, height: 800 };
     const { cssVisualViewport } = await cdp.send("Page.getLayoutMetrics");
     clip = {
       x: cssVisualViewport.pageX,
@@ -179,11 +198,13 @@ export const snapshot = async (input: {
   readonly page: Page;
   readonly cdp: CDPSession;
   readonly renderScale: number;
+  /** For a page Playwright did not size, such as one the desktop draws. */
+  readonly viewport?: Viewport;
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
 }): Promise<PreviewAutomationSnapshot> => {
-  const viewport = input.page.viewportSize() ?? { width: 1280, height: 800 };
+  const viewport = input.viewport ?? input.page.viewportSize() ?? { width: 1280, height: 800 };
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * input.renderScale));
   const state = refsFor(input.page);
   invalidateRefs(input.page);
@@ -196,7 +217,7 @@ export const snapshot = async (input: {
       >
     >,
     input.page.ariaSnapshot({ mode: "ai", boxes: true, timeout: DEFAULT_TIMEOUT_MS }),
-    captureViewport(input.page, input.cdp, { format: "png", scale }),
+    captureViewport(input.page, input.cdp, { format: "png", scale, viewport }),
   ]);
   if (state.generation !== generation) {
     throw new ServerBrowserOperationError(
@@ -220,8 +241,10 @@ export const snapshot = async (input: {
     screenshot: {
       mimeType: "image/png",
       data,
-      width: Math.round(viewport.width * input.renderScale * scale),
-      height: Math.round(viewport.height * input.renderScale * scale),
+      ...(pngSize(data) ?? {
+        width: Math.round(viewport.width * input.renderScale * scale),
+        height: Math.round(viewport.height * input.renderScale * scale),
+      }),
     },
   };
 };
