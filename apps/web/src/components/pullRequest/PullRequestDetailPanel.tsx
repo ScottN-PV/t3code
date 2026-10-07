@@ -167,7 +167,6 @@ import {
   PullRequestDiffStat,
   PullRequestMetaLine,
   PullRequestReviewOutcomeIcon,
-  pullRequestChecksState,
   detailSummaryChecksState,
   UNREADABLE_CHECKS_EXPLANATION,
   pullRequestChecksStatePresentation,
@@ -1438,7 +1437,7 @@ export function PullRequestDetailPanel({
   const can = (action: PullRequestAction) =>
     detail?.capabilities.actions.includes(action) === true &&
     detail.viewerPermissions.actions.includes(action);
-  const detailChecksState = detail ? pullRequestChecksState(detail.checks) : null;
+  const detailChecksState = detail ? detailSummaryChecksState(detail) : null;
   const latestChecksState =
     sharedSummary?.checksState === undefined ? detailChecksState : sharedSummary.checksState;
   // List rollups can omit workflows awaiting approval. Only refreshed detail can clear those.
@@ -1447,9 +1446,8 @@ export function PullRequestDetailPanel({
     detail?.checks.some((check) => check.status === "action-required")
       ? "pending"
       : latestChecksState;
-  // A newer rollup cannot tell us which runs changed or how many passed. Checks the host will not
-  // show this reader are not out of date: reading them again returns none.
-  const checksStale = detail?.checksUnreadable !== true && checksState !== detailChecksState;
+  // A newer rollup cannot tell us which runs changed or how many passed.
+  const checksStale = checksState !== detailChecksState;
   // The merge state remains in one stable slot from waiting through completion. Conflicts take
   // the slot while they need a person; the armed badge remains beside them so that state is not lost.
   const primaryAction = detail
