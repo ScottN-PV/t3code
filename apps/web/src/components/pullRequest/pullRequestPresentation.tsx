@@ -304,17 +304,20 @@ export function pullRequestChecksState(
 
 /**
  * The rollup a detail publishes to the shared summary. A detail that could not read its checks
- * passes on the host's overall state for its own head commit. Without one it publishes null, so
- * an older rollup kept in the shared summary is not shown as current.
+ * passes on the host's overall state for its own head commit, held pending by workflows awaiting
+ * approval as a readable rollup would be. Without either it publishes null, so an older rollup
+ * kept in the shared summary is not shown as current.
  */
 export function detailSummaryChecksState(detail: {
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly checksUnreadable?: boolean | undefined;
   readonly checksRollupState?: PullRequestChecksState | undefined;
 }): PullRequestChecksState | null {
-  return detail.checksUnreadable === true
-    ? (detail.checksRollupState ?? null)
-    : pullRequestChecksState(detail.checks);
+  if (detail.checksUnreadable !== true) return pullRequestChecksState(detail.checks);
+  return detail.checksRollupState !== "failing" &&
+    detail.checks.some((check) => check.status === "action-required")
+    ? "pending"
+    : (detail.checksRollupState ?? null);
 }
 
 /**
