@@ -126,6 +126,7 @@ vi.mock("~/lib/sourceControlActions", () => ({
 vi.mock("~/lib/utils", () => ({ cn: () => "", randomUUID: () => "action" }));
 vi.mock("~/editorPreferences", () => ({ useOpenInPreferredEditor: () => () => {} }));
 vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => () => {} }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => () => {} }));
 vi.mock("~/lib/openPullRequestLink", () => ({ useOpenPrLink: () => () => {} }));
 vi.mock("~/components/ui/toast", () => ({
   stackedThreadToast: (input: unknown) => input,
