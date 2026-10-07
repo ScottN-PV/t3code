@@ -291,6 +291,32 @@ describe("server browser snapshot size", () => {
     },
   );
 
+  it("reads the page's own ratio and viewport after page script reassigns them", async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor: 1.5,
+      });
+      const page = await context.newPage();
+      const cdp = await context.newCDPSession(page);
+      await page.setContent(
+        "<script>devicePixelRatio = -1.5; innerHeight = 1e7; innerWidth = 99999;</script>",
+      );
+      expect(await page.evaluate("[devicePixelRatio, innerWidth, innerHeight]")).toEqual([
+        -1.5, 99999, 1e7,
+      ]);
+      expect(await ServerBrowserPage.readPageMetrics(cdp)).toEqual({
+        ratio: 1.5,
+        width: 1280,
+        height: 800,
+        zoom: 1,
+      });
+    } finally {
+      await browser.close();
+    }
+  });
+
   it("reports the captured image's size when the given viewport is a pixel off", async () => {
     const browser = await chromium.launch({
       headless: true,

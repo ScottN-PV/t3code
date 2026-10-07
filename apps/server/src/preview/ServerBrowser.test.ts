@@ -1037,17 +1037,17 @@ const reportPage = (
   },
 ) => {
   const { zoom = 1, ...reported } = page;
-  const evaluate = context.page.evaluate.getMockImplementation()!;
-  context.page.evaluate.mockImplementation(((script?: unknown) =>
-    typeof script === "string" && script.includes("devicePixelRatio")
-      ? Promise.resolve(reported)
-      : evaluate()) as typeof evaluate);
+  const replies: Record<string, Record<string, unknown>> = {
+    "Page.getFrameTree": { frameTree: { frame: { id: "main" } } },
+    "Page.createIsolatedWorld": { executionContextId: 7 },
+    "Page.getLayoutMetrics": { cssVisualViewport: { pageX: 0, pageY: 0, zoom } },
+  };
   for (const session of context.sessions) {
     const send = session.send.getMockImplementation()!;
     session.send.mockImplementation(async (method, input) =>
-      method === "Page.getLayoutMetrics"
-        ? { cssVisualViewport: { pageX: 0, pageY: 0, zoom } }
-        : send(method, input),
+      method === "Runtime.evaluate" && (input as { contextId?: number })?.contextId === 7
+        ? { result: { value: reported } }
+        : (replies[method] ?? send(method, input)),
     );
   }
 };
@@ -1178,9 +1178,11 @@ it.live("keeps a headless tab's snapshot at its own render scale", () =>
         input: {},
       });
       expect(captureClips(contexts[0]!)).toEqual([{ width: 1280, height: 800, scale: 0.5 }]);
-      expect(contexts[0]!.page.evaluate).not.toHaveBeenCalledWith(
-        expect.stringContaining("devicePixelRatio"),
-      );
+      expect(
+        contexts[0]!.sessions.flatMap((session) =>
+          session.send.mock.calls.map(([method]) => method),
+        ),
+      ).not.toContain("Page.createIsolatedWorld");
       expect(snapshot.screenshot).toMatchObject({ width: 1280, height: 800 });
     }),
   ).pipe(Effect.provide(layer)),

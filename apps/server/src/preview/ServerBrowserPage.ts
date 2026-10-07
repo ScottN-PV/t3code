@@ -164,6 +164,34 @@ const pngSize = (base64: string) => {
 /** A page's viewport in device-independent pixels, the units a capture clip is given in. */
 type Viewport = { readonly width: number; readonly height: number };
 
+/**
+ * A page's display ratio and CSS viewport, and its zoom. The ratio and viewport are read in an
+ * isolated world, since page script can reassign `devicePixelRatio`, `innerWidth`, and
+ * `innerHeight` in its own.
+ */
+export const readPageMetrics = async (cdp: CDPSession) => {
+  const { frameTree } = await cdp.send("Page.getFrameTree");
+  const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
+    frameId: frameTree.frame.id,
+    // Chromium reuses a named world; an unnamed one is created again on each call.
+    worldName: "t3-preview-metrics",
+  });
+  const { result } = await cdp.send("Runtime.evaluate", {
+    expression: "({ ratio: devicePixelRatio, width: innerWidth, height: innerHeight })",
+    contextId: executionContextId,
+    returnByValue: true,
+  });
+  const { cssVisualViewport } = await cdp.send("Page.getLayoutMetrics");
+  return {
+    ...(result.value as {
+      readonly ratio: number;
+      readonly width: number;
+      readonly height: number;
+    }),
+    zoom: cssVisualViewport.zoom ?? 1,
+  };
+};
+
 // Scaled captures repaint live screencasts, so callers pause them. Clips use document offsets.
 export const captureViewport = async (
   page: Page,

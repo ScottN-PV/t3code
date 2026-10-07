@@ -1279,16 +1279,12 @@ const make = Effect.gen(function* () {
    */
   const snapshotRendering = async (tab: ServerTab) => {
     if (!tab.desktop) return { renderScale: RENDER_SCALE };
-    const page = (await tab.page.evaluate(
-      "({ ratio: devicePixelRatio, width: innerWidth, height: innerHeight })",
-    )) as { readonly ratio: number; readonly width: number; readonly height: number };
-    const { cssVisualViewport } = await tab.cdp.send("Page.getLayoutMetrics");
-    const zoom = cssVisualViewport.zoom ?? 1;
+    const page = await ServerBrowserPage.readPageMetrics(tab.cdp);
     return {
-      renderScale: page.ratio / zoom,
+      renderScale: page.ratio / page.zoom,
       viewport: {
-        width: Math.round(page.width * zoom),
-        height: Math.round(page.height * zoom),
+        width: Math.round(page.width * page.zoom),
+        height: Math.round(page.height * page.zoom),
       },
     };
   };
