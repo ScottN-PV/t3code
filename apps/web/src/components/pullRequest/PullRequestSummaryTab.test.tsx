@@ -160,6 +160,33 @@ it("explains checks the token cannot read instead of reporting none", () => {
   expect(texts).not.toContain("No checks reported.");
 });
 
+it("keeps the explanation when a newer rollup marks unreadable checks out of date", () => {
+  const unreadable = { ...detail, checks: [], checksUnreadable: true };
+  act(() => {
+    renderer = create(
+      <PullRequestSummaryTab
+        environmentId={EnvironmentId.make("environment")}
+        threadRef={null}
+        reference={unreadable}
+        detail={unreadable}
+        activityPending={false}
+        activityError={null}
+        onRefresh={() => {}}
+        checksStale
+      />,
+    );
+  });
+  click("Checks");
+  expect(renderer.root.findAllByType("p").flatMap((paragraph) => paragraph.children)).toContain(
+    "GitHub does not show checks to the signed-in token. A fine-grained personal access token cannot read check runs.",
+  );
+  expect(
+    renderer.root
+      .findAllByType("span")
+      .some((span) => span.children.includes("Check details are out of date.")),
+  ).toBe(true);
+});
+
 it("keeps workflow approval rows beside the explanation", () => {
   const approval = {
     name: "CI",

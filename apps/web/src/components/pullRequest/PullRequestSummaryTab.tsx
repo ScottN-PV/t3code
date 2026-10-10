@@ -810,7 +810,7 @@ export function PullRequestSummaryTab({
       </Section>
 
       <Section key={`checks:${detail.url}`} title="Checks" defaultOpen={false}>
-        {!checksStale && detail.checksUnreadable === true ? (
+        {detail.checksUnreadable === true ? (
           <p className="text-xs text-muted-foreground">{UNREADABLE_CHECKS_EXPLANATION}</p>
         ) : null}
         {checksStale ? (
