@@ -8302,6 +8302,96 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect("creates the child thread of a subagent resumed after T3 missed its launch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const TASK_ID = "task-missed-launch";
+        const SEND = "toolu-missed-launch-sendmessage";
+        // The CLI's session storage still records the Agent launch T3 never saw.
+        const harness = yield* makeWakeHarnessWithOptions({
+          subagentLaunchToolUseId: "toolu-missed-launch-agent",
+        });
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-missed-launch"),
+            text: "Ask the auditor to check again.",
+            attachments: [],
+          }),
+        );
+        for (const frame of [
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "msg_missed_launch_sendmessage",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: SEND,
+                  name: "SendMessage",
+                  input: { to: TASK_ID, message: "Check again." },
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: "00000000-0000-4000-8000-000000001301",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+          makeSubagentTaskStartedFrame({
+            taskId: TASK_ID,
+            toolUseId: SEND,
+            uuid: "00000000-0000-4000-8000-000000001302",
+          }),
+          makeSubagentNotificationFrame({
+            taskId: TASK_ID,
+            toolUseId: SEND,
+            summary: "Checked again.",
+            uuid: "00000000-0000-4000-8000-000000001303",
+          }),
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000001304",
+            result: "Asked the auditor.",
+          }),
+        ]) {
+          yield* Queue.offer(harness.sdkMessages, frame);
+        }
+        yield* Queue.take(harness.terminalReceipts);
+
+        const childThreadIds = harness.events.flatMap((event) =>
+          event.type === "subagent.updated" && event.subagent.nativeTaskRef?.nativeId === TASK_ID
+            ? [event.subagent.childThreadId]
+            : [],
+        );
+        assert.isNotEmpty(childThreadIds);
+        const offers = harness.events.flatMap((event) =>
+          event.type === "app_thread.created" && event.appThread.id === childThreadIds[0]
+            ? [event]
+            : [],
+        );
+        assert.deepEqual(
+          offers.map((offer) => offer.createOnly),
+          [true],
+        );
+        assert.include(offers[0]?.appThread.title, "Audit recent commits");
+        // The thread exists before the resume's prompt lands in it.
+        const firstChildMessage = harness.events.findIndex(
+          (event) =>
+            event.type === "message.updated" && event.message.threadId === childThreadIds[0],
+        );
+        assert.isAbove(firstChildMessage, harness.events.indexOf(offers[0]));
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("releases held frames before the notification that first names the tool use", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -11744,12 +11834,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           threadMessages(harness.events, member?.childThreadId).map((event) => event.message.text),
           ["Reply with exactly: A1"],
         );
-        assert.isFalse(
-          harness.events.some(
-            (event) =>
-              event.type === "app_thread.created" &&
-              event.appThread.id === coordinator?.childThreadId,
+        assert.deepEqual(
+          harness.events.flatMap((event) =>
+            event.type === "app_thread.created" && event.appThread.id === coordinator?.childThreadId
+              ? [event.createOnly]
+              : [],
           ),
+          [true],
         );
       }).pipe(
         Effect.provide(

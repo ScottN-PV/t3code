@@ -80,6 +80,11 @@ export const ProviderAdapterV2Event = Schema.Union([
     type: Schema.Literal("app_thread.created"),
     driver: ProviderDriverKind,
     appThread: OrchestrationV2AppThread,
+    /**
+     * Set when the adapter cannot tell whether the thread already exists, such as a subagent
+     * recovered from the CLI's session storage. An existing thread keeps its title and model.
+     */
+    createOnly: Schema.optional(Schema.Literal(true)),
   }),
   Schema.Struct({
     type: Schema.Literal("provider_session.updated"),

@@ -542,6 +542,7 @@ export const layer: Layer.Layer<
                 ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
               }),
             );
+            if (existing !== null && input.event.createOnly === true) return [];
             if (
               existing !== null &&
               existing.title === offered.title &&

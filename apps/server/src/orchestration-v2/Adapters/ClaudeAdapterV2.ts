@@ -4365,7 +4365,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // carry the launch call as parent_tool_use_id, which only the CLI's
         // session storage still records. Registering the subagent as a
         // finished run lets the resume reopen it like an in-session resume:
-        // same child thread, launch prompt kept, the new prompt appended.
+        // same child thread, launch prompt kept, the new prompt appended. If
+        // T3 never saw the launch, the reopen creates the missing child thread.
         const recoverResumedClaudeSubagent = Effect.fnUntraced(function* (resume: {
           readonly context: ActiveClaudeTurnContext;
           readonly nativeThreadId: string;
@@ -5071,13 +5072,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               createdBy: "agent",
               creationSource: "provider",
             });
-            if (existingSubagent === undefined) {
-              yield* emitProviderEvent({
-                type: "app_thread.created",
-                driver: CLAUDE_PROVIDER,
-                appThread: childThread,
-              });
-            }
+            // Only a recovered subagent gets here already registered. Its child
+            // thread exists unless T3 missed the launch, so the offer must not
+            // replace a saved title or model.
+            yield* emitProviderEvent({
+              type: "app_thread.created",
+              driver: CLAUDE_PROVIDER,
+              appThread: childThread,
+              ...(existingSubagent === undefined ? {} : { createOnly: true as const }),
+            });
             subagent.childThread = childThread;
           }
 

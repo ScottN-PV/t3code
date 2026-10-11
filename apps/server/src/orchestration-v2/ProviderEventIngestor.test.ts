@@ -1673,6 +1673,61 @@ layer("ProviderEventIngestorV2", (it) => {
     }),
   );
 
+  it.effect("creates a missing thread from a create-only offer and leaves a saved one alone", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const rootEvent = yield* threadCreatedEvent(now);
+      if (rootEvent.type !== "thread.created") throw new Error("Expected thread fixture");
+      const childThreadId = idAllocator.derive.threadFromProviderThread({
+        driver: CODEX_DRIVER,
+        nativeThreadId: "recovered-subagent",
+      });
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId: rootEvent.threadId,
+      });
+      const offered = {
+        ...rootEvent.payload,
+        id: childThreadId,
+        title: "Audit recent commits",
+        activeProviderThreadId: null,
+        lineage: {
+          parentThreadId: rootEvent.threadId,
+          relationshipToParent: "subagent" as const,
+          rootThreadId: rootEvent.threadId,
+        },
+      };
+      const offerCreateOnly = (appThread: OrchestrationV2AppThread) =>
+        ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: rootEvent.threadId,
+          event: { type: "app_thread.created", driver: CODEX_DRIVER, appThread, createOnly: true },
+        });
+      yield* eventSink.write({ events: [rootEvent] });
+
+      const created = yield* offerCreateOnly(offered);
+      assert.deepEqual(
+        created.map((stored) => stored.event.type),
+        ["thread.created"],
+      );
+      const saved = yield* projectionStore.getThread(childThreadId);
+      assert.deepEqual(
+        yield* offerCreateOnly({
+          ...offered,
+          title: "Subagent 3",
+          modelSelection: { ...modelSelection, model: "gpt-6.1-sol" },
+        }),
+        [],
+      );
+      assert.deepEqual(yield* projectionStore.getThread(childThreadId), saved);
+    }),
+  );
+
   it.effect("moves a native subagent's thread to the model its provider reports later", () =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
