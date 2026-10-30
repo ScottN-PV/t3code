@@ -2087,7 +2087,10 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
                   (task) => task.id === run.delegatedTaskId,
                 )!.result,
               );
-              yield* eventSink.write({ events: [finishRun(child.childThreadId, competingRun)] });
+              yield* eventSink.write({
+                commandId: reconcileCommandId("competing-followup-finish"),
+                events: [finishRun(child.childThreadId, competingRun)],
+              });
             }
             yield* eventSink.write({
               commandId: reconcileCommandId(`nested-continuation-finish-${outcome}`),
