@@ -10,6 +10,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import { setThreadArchived } from "../../threadSettlement.ts";
 
 const handlers = {
   orchestrator_capabilities: McpToolAccess.reads((input) =>
@@ -222,6 +223,15 @@ const handlers = {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
         return yield* service.interruptThread(scope, input);
       }),
+  ),
+  // writesThreads refuses read-only clients and fenced links reaching other links' threads.
+  t3_thread_settle: McpToolAccess.writesThreads(
+    (input) => [input.threadId],
+    (input) => setThreadArchived(input, true),
+  ),
+  t3_thread_unsettle: McpToolAccess.writesThreads(
+    (input) => [input.threadId],
+    (input) => setThreadArchived(input, false),
   ),
 } satisfies McpToolAccess.Handlers<typeof OrchestratorToolkit.tools>;
 

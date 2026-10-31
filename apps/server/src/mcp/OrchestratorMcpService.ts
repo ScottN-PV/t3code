@@ -2196,6 +2196,8 @@ const make = Effect.gen(function* () {
           incrementalThreadRead: true,
           scheduledTasks: true,
           maxBatchThreads: 20,
+          // The settle tools write, so a read-only client cannot use them.
+          threadSettlement: scope.client?.access !== "read-only",
         },
       };
     }),

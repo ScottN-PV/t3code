@@ -12,7 +12,8 @@ agent can use this endpoint to:
 - list a project's threads and incrementally read any thread;
 - rename threads, regenerate titles, and link or unlink pull requests;
 - send or steer follow-up messages; and
-- wait for or interrupt ordinary thread runs.
+- wait for or interrupt ordinary thread runs; and
+- archive or restore finished threads that agents launched.
 
 These are T3 orchestration operations, not provider-native sub-agent APIs.
 Delegated tasks always create a T3 child thread and run. The child receives
@@ -192,7 +193,7 @@ provider selection model-visible without allowing a request that cannot run.
 
 ## Tool Surface
 
-The server exposes eleven orchestration tools.
+The server exposes these orchestration tools, among others.
 
 ### `orchestrator_capabilities`
 
@@ -202,7 +203,9 @@ Returns:
 - the parent runtime and interaction modes;
 - registered provider instances and advertised models;
 - whether each provider can run a child task; and
-- feature flags for polling, cancellation, and batch thread creation.
+- feature flags for polling, cancellation, batch thread creation, and thread
+  settlement (`threadSettlement`, false for read-only clients; absent from
+  older servers).
 
 Unavailable providers include model-visible constraints such as missing V2
 adapter support, disabled state, missing executable, or missing authentication.
@@ -451,6 +454,43 @@ Interrupts a selected active run through the normal V2 `run.interrupt` command.
 Without `runId`, it selects the newest interruptible run. A terminal run is
 returned unchanged, and a thread with no active provider turn returns
 `no_active_run`.
+
+### `t3_thread_settle` and `t3_thread_unsettle`
+
+```ts
+type ThreadSettleInput = { threadId: string; environmentId?: string };
+type ThreadSettleResult = {
+  threadId: string;
+  archived: boolean;
+  changed: boolean;
+  link: string;
+};
+```
+
+`t3_thread_settle` archives a thread through the same `thread.archive` command
+as the app's archive button, so it detaches the thread's provider sessions,
+revokes their MCP credentials, and ends its pull request watches.
+`t3_thread_unsettle` restores it with `thread.unarchive`. Here "settle" means
+archive. These tools are separate from the app's Settled state, which
+`t3_thread_organize` sets with `action: "settle"`.
+
+Both tools refuse with `capability_denied`:
+
+- threads that no agent launched through T3's MCP tools (only threads with
+  `createdBy: "agent"` and `creationSource: "mcp"` qualify, which is what
+  `t3_thread_launch`, `create_threads`, and `delegate_task` create), so the
+  user's own threads are never touched;
+- the calling thread itself; and
+- read-only MCP clients (`orchestration:read` only). Both tools need a write
+  grant, `orchestration:operate`, like `t3_thread_send`.
+
+`t3_thread_settle` also refuses with `invalid_request` while the thread has an
+active, starting, queued, or waiting run, a pending approval or question, or
+pending background work. `thread.archive` would otherwise cancel queued and
+preparing runs. Repeating either call on a thread already in the requested
+state returns `changed: false` without dispatching. A thread from a fenced
+link (one paired below full access) can be settled only by callers from the
+same link, as with other thread writes.
 
 ## Delegated Task Lifecycle
 
