@@ -569,6 +569,22 @@ export const OrchestratorMcpThreadInterruptResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadInterruptResult = typeof OrchestratorMcpThreadInterruptResult.Type;
 
+/** `t3_thread_settle` archives a thread; `t3_thread_unsettle` restores it. */
+export const OrchestratorMcpThreadSettleInput = Schema.Struct({
+  environmentId: OrchestratorMcpEnvironmentTarget,
+  threadId: ThreadId,
+});
+export type OrchestratorMcpThreadSettleInput = typeof OrchestratorMcpThreadSettleInput.Type;
+
+export const OrchestratorMcpThreadSettleResult = Schema.Struct({
+  threadId: ThreadId,
+  archived: Schema.Boolean,
+  /** False when the thread was already in the requested state. */
+  changed: Schema.Boolean,
+  link: Schema.String,
+});
+export type OrchestratorMcpThreadSettleResult = typeof OrchestratorMcpThreadSettleResult.Type;
+
 export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
   search: Schema.optional(
@@ -645,6 +661,8 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
     incrementalThreadRead: Schema.Boolean,
     scheduledTasks: Schema.Boolean,
     maxBatchThreads: Schema.Number,
+    /** `t3_thread_settle` and `t3_thread_unsettle`. Absent from older servers. */
+    threadSettlement: Schema.optional(Schema.Boolean),
   }),
 });
 export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabilitiesResult.Type;

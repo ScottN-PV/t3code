@@ -32,12 +32,15 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendInput,
   OrchestratorMcpThreadSendResult,
+  OrchestratorMcpThreadSettleInput,
+  OrchestratorMcpThreadSettleResult,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
@@ -63,6 +66,8 @@ const linkingDependencies = [
   PeerLinkRequests.PeerLinkRequests,
   PeerLinks.PeerLinks,
 ];
+/** Settling mints its own command ids. */
+const settlementDependencies = [...dependencies, Crypto.Crypto];
 const threadMetadataDependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
@@ -347,6 +352,32 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
   .annotate(Tool.Idempotent, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
 
+const ThreadSettleTool = Tool.make("t3_thread_settle", {
+  description:
+    "Archive a finished thread an agent launched (`t3_thread_launch`, `create_threads`, `delegate_task`). Refuses the user's own threads, your own thread, and running, queued or waiting threads. Already archived: no change. Undo with `t3_thread_unsettle`.",
+  parameters: OrchestratorMcpThreadSettleInput,
+  success: OrchestratorMcpThreadSettleResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: settlementDependencies,
+})
+  .annotate(Tool.Title, "Settle (archive) a T3 thread")
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, true);
+
+const ThreadUnsettleTool = Tool.make("t3_thread_unsettle", {
+  description:
+    "Restore a thread archived with `t3_thread_settle`. Only threads an agent launched. Not archived: no change.",
+  parameters: OrchestratorMcpThreadSettleInput,
+  success: OrchestratorMcpThreadSettleResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: settlementDependencies,
+})
+  .annotate(Tool.Title, "Unsettle (unarchive) a T3 thread")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const OrchestratorToolkit = Toolkit.make(
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
@@ -365,6 +396,8 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadSendTool,
   ThreadWaitTool,
   ThreadInterruptTool,
+  ThreadSettleTool,
+  ThreadUnsettleTool,
   EnvironmentLinksTool,
   EnvironmentLinkTool,
   EnvironmentUnlinkTool,
